@@ -1,11 +1,15 @@
 <script lang="ts">
   import UsernameInput from '$lib/components/UsernameInput.svelte';
   import ToneSelector from '$lib/components/ToneSelector.svelte';
+  import ScopeSelector from '$lib/components/ScopeSelector.svelte';
   import SettingsDrawer from '$lib/components/SettingsDrawer.svelte';
   import ResultsPanel from '$lib/components/ResultsPanel.svelte';
+  import AnalysisSummary from '$lib/components/AnalysisSummary.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import LanguageSelector from '$lib/components/LanguageSelector.svelte';
   import { analyze } from '$lib/analyzer.ts';
+  import { defaultScope, type AnalysisScope } from '$lib/github.ts';
+  import type { AnalysisMetadata } from '$lib/github.ts';
   import type { ProviderId } from '$lib/providers/types.ts';
   import { providerConfigs } from '$lib/providers/types.ts';
   import {
@@ -19,6 +23,8 @@
     setGithubPat,
     getLanguage,
     setLanguage,
+    getCustomPersonality,
+    setCustomPersonality,
   } from '$lib/storage.ts';
 
   let username = $state('');
@@ -27,6 +33,9 @@
 
   let provider = $state<ProviderId>(getProvider());
   let language = $state(getLanguage());
+  let customPersonality = $state(getCustomPersonality());
+
+  let scope = $state<AnalysisScope>({ ...defaultScope });
 
   // Load saved keys/models for all providers
   let apiKeys = $state<Record<ProviderId, string>>({
@@ -47,12 +56,19 @@
   let error = $state('');
   let resultsVisible = $state(false);
 
+  // Analysis metadata
+  let metadata = $state<AnalysisMetadata | null>(null);
+  let tokenEstimate = $state(0);
+  let costEstimate = $state('');
+  let logs = $state<string[]>([]);
+
   let abortController: AbortController | null = null;
 
   // Persist all settings
   $effect(() => setProvider(provider));
   $effect(() => setLanguage(language));
   $effect(() => setGithubPat(githubPat));
+  $effect(() => setCustomPersonality(customPersonality));
   $effect(() => {
     for (const id of ['anthropic', 'openai', 'gemini'] as const) {
       setApiKey(id, apiKeys[id]);
@@ -78,6 +94,10 @@
     content = '';
     error = '';
     resultsVisible = true;
+    metadata = null;
+    tokenEstimate = 0;
+    costEstimate = '';
+    logs = [];
 
     abortController = new AbortController();
 
@@ -89,6 +109,8 @@
       models[provider],
       language,
       githubPat || undefined,
+      scope,
+      customPersonality || undefined,
       {
         onProgress: (msg: string) => {
           progress = msg;
@@ -104,6 +126,14 @@
         onDone: () => {
           loading = false;
         },
+        onLog: (msg: string) => {
+          logs = [...logs, `[${new Date().toLocaleTimeString()}] ${msg}`];
+        },
+        onMetadata: (m: AnalysisMetadata, tokens: number, cost: string) => {
+          metadata = m;
+          tokenEstimate = tokens;
+          costEstimate = cost;
+        },
       },
       abortController.signal,
     );
@@ -113,6 +143,8 @@
     abortController?.abort();
     loading = false;
   }
+
+  let showPersonality = $state(false);
 </script>
 
 <div class="mx-auto max-w-3xl px-4 py-12">
@@ -158,13 +190,51 @@
 
     <LanguageSelector bind:selected={language} />
 
+    <ScopeSelector bind:scope />
+
+    <!-- Custom personality -->
+    <div>
+      <button
+        type="button"
+        onclick={() => (showPersonality = !showPersonality)}
+        class="text-xs font-medium text-blue-600 hover:text-blue-700
+               dark:text-blue-400 dark:hover:text-blue-300"
+      >
+        {showPersonality ? 'Hide' : 'Add'} custom personality instructions
+      </button>
+      {#if showPersonality}
+        <div class="mt-2">
+          <textarea
+            bind:value={customPersonality}
+            placeholder="e.g. 'You are a pirate captain who speaks in nautical terms' or 'Focus especially on security practices and test coverage' or 'Be extremely sarcastic about JavaScript frameworks'"
+            rows="3"
+            class="w-full rounded-lg border border-zinc-300 bg-white
+                   px-4 py-2 text-sm text-zinc-900
+                   placeholder:text-zinc-400
+                   focus:border-blue-500 focus:outline-none
+                   focus:ring-2 focus:ring-blue-500/20
+                   dark:border-zinc-700 dark:bg-zinc-800
+                   dark:text-zinc-100
+                   dark:placeholder:text-zinc-500
+                   dark:focus:border-blue-400
+                   dark:focus:ring-blue-400/20"
+          ></textarea>
+          <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Add any custom instructions for the AI. This will be appended to the
+            selected tone's personality.
+          </p>
+        </div>
+      {/if}
+    </div>
+
     <div class="flex items-center gap-3">
       <button
         type="button"
         onclick={handleAnalyze}
         disabled={loading || !username.trim()}
-        class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium
-               text-white transition-colors hover:bg-blue-700
+        class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm
+               font-medium text-white transition-colors
+               hover:bg-blue-700
                disabled:cursor-not-allowed disabled:opacity-50
                dark:bg-blue-500 dark:hover:bg-blue-600"
       >
@@ -175,10 +245,10 @@
         <button
           type="button"
           onclick={handleCancel}
-          class="rounded-lg border border-zinc-300 px-4 py-2.5 text-sm
-                 text-zinc-600 transition-colors hover:border-zinc-400
-                 dark:border-zinc-600 dark:text-zinc-400
-                 dark:hover:border-zinc-500"
+          class="rounded-lg border border-zinc-300 px-4 py-2.5
+                 text-sm text-zinc-600 transition-colors
+                 hover:border-zinc-400 dark:border-zinc-600
+                 dark:text-zinc-400 dark:hover:border-zinc-500"
         >
           Cancel
         </button>
@@ -192,8 +262,15 @@
     </div>
   </section>
 
+  <!-- Analysis metadata / summary -->
+  {#if metadata || logs.length > 0}
+    <section class="mt-6">
+      <AnalysisSummary {metadata} {tokenEstimate} {costEstimate} {logs} />
+    </section>
+  {/if}
+
   <!-- Results -->
-  <section class="mt-8">
+  <section class="mt-4">
     <ResultsPanel
       {content}
       {progress}

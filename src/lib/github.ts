@@ -140,6 +140,44 @@ export interface TreeEntry {
   size?: number;
 }
 
+// ---- Analysis scope options ----
+
+export interface AnalysisScope {
+  recentActivity: boolean;
+  sourceCode: boolean;
+  pullRequests: boolean;
+  issues: boolean;
+  commentsReviews: boolean;
+  crossRepoContributions: boolean;
+  commitMessages: boolean;
+}
+
+export const defaultScope: AnalysisScope = {
+  recentActivity: true,
+  sourceCode: true,
+  pullRequests: true,
+  issues: true,
+  commentsReviews: true,
+  crossRepoContributions: true,
+  commitMessages: true,
+};
+
+// ---- Analysis manifest (what was actually fetched) ----
+
+export interface AnalyzedItem {
+  label: string;
+  url: string;
+  type: 'profile' | 'repo' | 'file' | 'commit' | 'pr' | 'issue' | 'comment';
+}
+
+export interface AnalysisMetadata {
+  analyzedItems: AnalyzedItem[];
+  rateLimitRemaining: number | null;
+  rateLimitTotal: number | null;
+  rateLimitReset: string | null;
+  apiCallsMade: number;
+}
+
 // ---- Top-level data shape ----
 
 export interface GitHubData {
@@ -147,12 +185,18 @@ export interface GitHubData {
   orgs: GitHubOrg[];
   recentEvents: GitHubEvent[];
   ownedRepos: GitHubRepo[];
+  forkedRepos: GitHubRepo[];
+  contributedRepoNames: string[];
   repoDetails: RepoDetail[];
   crossRepoActivity: CrossRepoActivity;
+  metadata: AnalysisMetadata;
 }
+
+export type RepoRelation = 'owned' | 'forked' | 'contributed';
 
 export interface RepoDetail {
   repo: GitHubRepo;
+  relation: RepoRelation;
   commits: GitHubCommit[];
   files: FileContent[];
   tree: TreeEntry[];
@@ -171,6 +215,32 @@ export interface CrossRepoActivity {
 // ---- Constants ----
 
 const API_BASE = 'https://api.github.com';
+
+// Max characters to read from a single source file before truncating.
+// Keeps the LLM prompt from being overwhelmed by a single large file.
+const MAX_FILE_CONTENT_LENGTH = 3000;
+
+// Max characters to keep from PR/issue/comment bodies.
+// Long bodies are truncated to save prompt tokens.
+const MAX_BODY_TRUNCATE_LENGTH = 500;
+
+// Max characters for cross-repo PR/issue bodies (shorter than deep-dive).
+const MAX_CROSS_REPO_BODY_LENGTH = 300;
+
+// Max owned repos to include in the overview section of the prompt.
+const MAX_OWNED_REPOS_IN_OVERVIEW = 15;
+
+// Max forked repos to include in the overview section.
+const MAX_FORKED_REPOS_IN_OVERVIEW = 10;
+
+// Max contributed repos to fetch metadata for (each costs an API call).
+const MAX_CONTRIBUTED_REPOS_TO_FETCH = 5;
+
+// Max comments to track in the analyzed items manifest per category.
+const MAX_TRACKED_COMMENTS_PER_CATEGORY = 5;
+
+// Max commit message length to show in analyzed items label.
+const MAX_COMMIT_LABEL_LENGTH = 60;
 
 const INTERESTING_FILES = [
   'lib.rs',
@@ -200,6 +270,30 @@ const INTERESTING_FILES = [
 
 // ---- HTTP helpers ----
 
+// Mutable tracker for rate limit info across calls
+let _rateLimitRemaining: number | null = null;
+let _rateLimitTotal: number | null = null;
+let _rateLimitReset: string | null = null;
+let _apiCallsMade = 0;
+
+function resetTracking(): void {
+  _rateLimitRemaining = null;
+  _rateLimitTotal = null;
+  _rateLimitReset = null;
+  _apiCallsMade = 0;
+}
+
+function trackRateLimit(res: Response): void {
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  const limit = res.headers.get('x-ratelimit-limit');
+  const reset = res.headers.get('x-ratelimit-reset');
+  if (remaining !== null) _rateLimitRemaining = parseInt(remaining);
+  if (limit !== null) _rateLimitTotal = parseInt(limit);
+  if (reset !== null) {
+    _rateLimitReset = new Date(parseInt(reset) * 1000).toLocaleTimeString();
+  }
+}
+
 function makeHeaders(pat?: string): Record<string, string> {
   const h: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
@@ -216,6 +310,8 @@ async function ghFetch<T>(
   const h = makeHeaders(pat);
   if (accept) h['Accept'] = accept;
   const res = await fetch(`${API_BASE}${path}`, { headers: h });
+  _apiCallsMade++;
+  trackRateLimit(res);
   if (!res.ok) {
     if (res.status === 403) {
       const remaining = res.headers.get('x-ratelimit-remaining');
@@ -263,17 +359,22 @@ async function fetchRawFile(
       `${API_BASE}/repos/${owner}/${repo}/contents/${path}`,
       { headers: h },
     );
+    _apiCallsMade++;
+    trackRateLimit(res);
     if (!res.ok) return null;
     const text = await res.text();
-    return text.length > 3000
-      ? text.slice(0, 3000) + '\n... (truncated)'
+    return text.length > MAX_FILE_CONTENT_LENGTH
+      ? text.slice(0, MAX_FILE_CONTENT_LENGTH) + '\n... (truncated)'
       : text;
   } catch {
     return null;
   }
 }
 
-function truncate(s: string | null, max: number = 500): string {
+export function truncate(
+  s: string | null,
+  max: number = MAX_BODY_TRUNCATE_LENGTH,
+): string {
   if (!s) return '';
   return s.length > max ? s.slice(0, max) + '... (truncated)' : s;
 }
@@ -284,9 +385,14 @@ export async function fetchGitHubData(
   username: string,
   pat?: string,
   onProgress?: (msg: string) => void,
+  scope?: AnalysisScope,
 ): Promise<GitHubData> {
   const log = onProgress ?? (() => {});
   const hasAuth = !!pat;
+  const s = scope ?? defaultScope;
+  resetTracking();
+
+  const analyzed: AnalyzedItem[] = [];
 
   // Budget awareness:
   // Without PAT: 60 req/hr. We aim for ~30-40 requests.
@@ -299,13 +405,15 @@ export async function fetchGitHubData(
   log('Fetching profile and recent activity...');
   const fetches: Promise<unknown>[] = [
     ghFetch<GitHubUser>(`/users/${username}`, pat),
-    ghSafe<GitHubEvent[]>(
-      `/users/${username}/events/public?per_page=100&page=1`,
-      pat,
-    ),
+    s.recentActivity
+      ? ghSafe<GitHubEvent[]>(
+          `/users/${username}/events/public?per_page=100&page=1`,
+          pat,
+        )
+      : Promise.resolve([]),
     ghSafe<GitHubOrg[]>(`/users/${username}/orgs`, pat),
   ];
-  if (eventPages >= 2) {
+  if (s.recentActivity && eventPages >= 2) {
     fetches.push(
       ghSafe<GitHubEvent[]>(
         `/users/${username}/events/public?per_page=100&page=2`,
@@ -313,7 +421,7 @@ export async function fetchGitHubData(
       ),
     );
   }
-  if (eventPages >= 3) {
+  if (s.recentActivity && eventPages >= 3) {
     fetches.push(
       ghSafe<GitHubEvent[]>(
         `/users/${username}/events/public?per_page=100&page=3`,
@@ -330,6 +438,12 @@ export async function fetchGitHubData(
   const events3 = (results[4] as GitHubEvent[] | undefined) ?? [];
   const recentEvents = [...events1, ...events2, ...events3];
 
+  analyzed.push({
+    label: `Profile: ${username}`,
+    url: `https://github.com/${username}`,
+    type: 'profile',
+  });
+
   // Phase 2: Repos sorted by recently pushed
   log('Fetching repositories...');
   const allRepos = await ghFetch<GitHubRepo[]>(
@@ -337,14 +451,60 @@ export async function fetchGitHubData(
     pat,
   );
 
-  // Build a picture of repos they actively work on
+  // Separate owned vs forked repos
   const ownedRepos = allRepos.filter(r => !r.fork);
+  const forkedRepos = allRepos.filter(r => r.fork);
   const activeRepoNames = extractActiveRepos(recentEvents, username);
 
-  // Pick repos for deep dive: prioritize recently active ones
+  // Identify repos from events that user doesn't own or fork
+  // These are contributions to other people's repos
+  const allRepoNames = new Set(allRepos.map(r => r.full_name));
+  const contributedRepoNames: string[] = [];
+  for (const name of activeRepoNames.keys()) {
+    if (!allRepoNames.has(name)) {
+      contributedRepoNames.push(name);
+    }
+  }
+
+  for (const r of ownedRepos.slice(0, MAX_OWNED_REPOS_IN_OVERVIEW)) {
+    analyzed.push({
+      label: `Owned: ${r.full_name}`,
+      url: r.html_url,
+      type: 'repo',
+    });
+  }
+  for (const r of forkedRepos.slice(0, MAX_FORKED_REPOS_IN_OVERVIEW)) {
+    analyzed.push({
+      label: `Fork: ${r.full_name}`,
+      url: r.html_url,
+      type: 'repo',
+    });
+  }
+
+  // Fetch metadata for contributed repos (not in user's repo list)
+  const contributedRepos: GitHubRepo[] = [];
+  if (s.crossRepoContributions) {
+    for (const name of contributedRepoNames.slice(
+      0,
+      MAX_CONTRIBUTED_REPOS_TO_FETCH,
+    )) {
+      log(`Fetching contributed repo ${name}...`);
+      const repo = await ghSafe<GitHubRepo>(`/repos/${name}`, pat);
+      if (repo && (repo as GitHubRepo).full_name) {
+        contributedRepos.push(repo as GitHubRepo);
+        analyzed.push({
+          label: `Contributed: ${name}`,
+          url: (repo as GitHubRepo).html_url,
+          type: 'repo',
+        });
+      }
+    }
+  }
+
+  // Pick repos for deep dive: include owned, forked, and contributed
   const deepDiveRepos = pickDeepDiveRepos(
     ownedRepos,
-    allRepos,
+    [...allRepos, ...contributedRepos],
     activeRepoNames,
     maxDeepDives,
   );
@@ -353,35 +513,63 @@ export async function fetchGitHubData(
   const repoDetails: RepoDetail[] = [];
   for (const repo of deepDiveRepos) {
     const owner = repo.full_name.split('/')[0];
-    log(`Analyzing ${repo.full_name} (code, PRs, issues, comments)...`);
-    const detail = await fetchRepoDetail(owner, repo, username, pat, hasAuth);
+    const relation: RepoRelation = repo.fork
+      ? 'forked'
+      : owner === username
+        ? 'owned'
+        : 'contributed';
+    log(
+      `Analyzing ${repo.full_name} [${relation}] ` +
+        `(code, PRs, issues, comments)...`,
+    );
+    const detail = await fetchRepoDetail(
+      owner,
+      repo,
+      username,
+      pat,
+      hasAuth,
+      s,
+      analyzed,
+    );
+    detail.relation = relation;
     repoDetails.push(detail);
   }
 
-  // Phase 4: Cross-repo contributions (skip without auth to save budget)
+  // Phase 4: Cross-repo contributions via Search API
   let crossRepoActivity: CrossRepoActivity = {
     recentPRs: [],
     recentIssues: [],
     recentCommitRepos: [],
   };
-  if (hasAuth) {
+  if (s.crossRepoContributions && hasAuth) {
     log('Fetching cross-repo contributions...');
-    crossRepoActivity = await fetchCrossRepoActivity(username, pat);
+    crossRepoActivity = await fetchCrossRepoActivity(username, pat, analyzed);
   }
+
+  const metadata: AnalysisMetadata = {
+    analyzedItems: analyzed,
+    rateLimitRemaining: _rateLimitRemaining,
+    rateLimitTotal: _rateLimitTotal,
+    rateLimitReset: _rateLimitReset,
+    apiCallsMade: _apiCallsMade,
+  };
 
   return {
     user,
     orgs,
     recentEvents,
-    ownedRepos: ownedRepos.slice(0, 15),
+    ownedRepos: ownedRepos.slice(0, MAX_OWNED_REPOS_IN_OVERVIEW),
+    forkedRepos: forkedRepos.slice(0, MAX_FORKED_REPOS_IN_OVERVIEW),
+    contributedRepoNames,
     repoDetails,
     crossRepoActivity,
+    metadata,
   };
 }
 
 // ---- Extract active repos from events ----
 
-function extractActiveRepos(
+export function extractActiveRepos(
   events: GitHubEvent[],
   _username: string,
 ): Map<string, number> {
@@ -395,7 +583,7 @@ function extractActiveRepos(
 
 // ---- Pick which repos to deep-dive ----
 
-function pickDeepDiveRepos(
+export function pickDeepDiveRepos(
   ownedRepos: GitHubRepo[],
   allRepos: GitHubRepo[],
   activeRepoNames: Map<string, number>,
@@ -439,7 +627,7 @@ function pickDeepDiveRepos(
   return result;
 }
 
-function daysSince(dateStr: string): number {
+export function daysSince(dateStr: string): number {
   const ms = Date.now() - new Date(dateStr).getTime();
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
@@ -449,6 +637,7 @@ function daysSince(dateStr: string): number {
 async function fetchCrossRepoActivity(
   username: string,
   pat?: string,
+  analyzed?: AnalyzedItem[],
 ): Promise<CrossRepoActivity> {
   // Search for recent PRs by this user (across all repos)
   const prSearch = await ghSafe<{ items: SearchItem[] }>(
@@ -474,10 +663,28 @@ async function fetchCrossRepoActivity(
 
   // Truncate bodies
   for (const item of recentPRs) {
-    item.body = truncate(item.body, 300);
+    item.body = truncate(item.body, MAX_CROSS_REPO_BODY_LENGTH);
   }
   for (const item of recentIssues) {
-    item.body = truncate(item.body, 300);
+    item.body = truncate(item.body, MAX_CROSS_REPO_BODY_LENGTH);
+  }
+
+  // Track analyzed items
+  if (analyzed) {
+    for (const pr of recentPRs) {
+      analyzed.push({
+        label: `Cross-repo PR: ${pr.title}`,
+        url: pr.html_url,
+        type: 'pr',
+      });
+    }
+    for (const issue of recentIssues) {
+      analyzed.push({
+        label: `Cross-repo issue: ${issue.title}`,
+        url: issue.html_url,
+        type: 'issue',
+      });
+    }
   }
 
   return {
@@ -495,36 +702,60 @@ async function fetchRepoDetail(
   username: string,
   pat?: string,
   thorough: boolean = true,
+  scope?: AnalysisScope,
+  analyzed?: AnalyzedItem[],
 ): Promise<RepoDetail> {
-  // Without auth: 3 calls per repo (commits, tree, 1 file read)
-  // With auth: 7+ calls per repo (commits, tree, files, PRs, issues, comments)
+  const s = scope ?? defaultScope;
 
   // Fetch commits by this user in this repo
-  const commits = await ghSafe<GitHubCommit[]>(
-    `/repos/${owner}/${repo.name}/commits?author=${username}&per_page=20`,
-    pat,
-  );
+  const commits = s.commitMessages
+    ? await ghSafe<GitHubCommit[]>(
+        `/repos/${owner}/${repo.name}/commits?author=${username}&per_page=20`,
+        pat,
+      )
+    : [];
+
+  if (analyzed) {
+    for (const c of commits) {
+      analyzed.push({
+        label: `Commit: ${c.commit.message.split('\n')[0].slice(0, MAX_COMMIT_LABEL_LENGTH)}`,
+        url: c.html_url,
+        type: 'commit',
+      });
+    }
+  }
 
   // Fetch file tree
   let tree: TreeEntry[] = [];
-  try {
-    const treeData = await ghFetch<{ tree: TreeEntry[] }>(
-      `/repos/${owner}/${repo.name}/git/trees/${repo.default_branch}?recursive=1`,
-      pat,
-    );
-    tree = treeData.tree.filter((e: TreeEntry) => e.type === 'blob');
-  } catch {
-    // empty repos or permission issues
+  if (s.sourceCode) {
+    try {
+      const treeData = await ghFetch<{ tree: TreeEntry[] }>(
+        `/repos/${owner}/${repo.name}/git/trees/${repo.default_branch}?recursive=1`,
+        pat,
+      );
+      tree = treeData.tree.filter((e: TreeEntry) => e.type === 'blob');
+    } catch {
+      // empty repos or permission issues
+    }
   }
 
   // Pick interesting source files to read
-  const filesToRead = pickInterestingFiles(tree);
-  const maxFiles = thorough ? 5 : 2;
   const files: FileContent[] = [];
-  for (const path of filesToRead.slice(0, maxFiles)) {
-    const content = await fetchRawFile(owner, repo.name, path, pat);
-    if (content) {
-      files.push({ path, content });
+  if (s.sourceCode) {
+    const filesToRead = pickInterestingFiles(tree);
+    const maxFiles = thorough ? 5 : 2;
+    for (const path of filesToRead.slice(0, maxFiles)) {
+      const content = await fetchRawFile(owner, repo.name, path, pat);
+      if (content) {
+        files.push({ path, content });
+        if (analyzed) {
+          analyzed.push({
+            label: `File: ${repo.full_name}/${path}`,
+            url: `https://github.com/${repo.full_name}/blob/${repo.default_branch}/${path}`,
+            type: 'file',
+          });
+        }
+      }
     }
   }
 
@@ -532,6 +763,7 @@ async function fetchRepoDetail(
   if (!thorough) {
     return {
       repo,
+      relation: 'owned' as RepoRelation,
       commits,
       files,
       tree,
@@ -543,36 +775,85 @@ async function fetchRepoDetail(
   }
 
   // Fetch PRs (all states, recent)
-  const pullRequests = await ghSafe<GitHubPR[]>(
-    `/repos/${owner}/${repo.name}/pulls?state=all&sort=updated&per_page=10`,
-    pat,
-  );
+  const pullRequests = s.pullRequests
+    ? await ghSafe<GitHubPR[]>(
+        `/repos/${owner}/${repo.name}/pulls?state=all&sort=updated&per_page=10`,
+        pat,
+      )
+    : [];
+
+  if (analyzed) {
+    for (const pr of pullRequests) {
+      analyzed.push({
+        label: `PR #${pr.number}: ${pr.title}`,
+        url: pr.html_url,
+        type: 'pr',
+      });
+    }
+  }
 
   // Fetch issues (exclude PRs)
-  const allIssues = await ghSafe<GitHubIssue[]>(
-    `/repos/${owner}/${repo.name}/issues?state=all&sort=updated&per_page=10`,
-    pat,
-  );
-  const issues = allIssues.filter((i: GitHubIssue) => !i.pull_request);
+  let issues: GitHubIssue[] = [];
+  if (s.issues) {
+    const allIssues = await ghSafe<GitHubIssue[]>(
+      `/repos/${owner}/${repo.name}/issues?state=all&sort=updated&per_page=10`,
+      pat,
+    );
+    issues = allIssues.filter((i: GitHubIssue) => !i.pull_request);
+    if (analyzed) {
+      for (const issue of issues) {
+        analyzed.push({
+          label: `Issue #${issue.number}: ${issue.title}`,
+          url: issue.html_url,
+          type: 'issue',
+        });
+      }
+    }
+  }
 
   // Fetch issue comments (personality, communication)
-  const issueComments = await ghSafe<GitHubComment[]>(
-    `/repos/${owner}/${repo.name}/issues/comments?sort=updated&direction=desc&per_page=15`,
-    pat,
-  );
+  const issueComments = s.commentsReviews
+    ? await ghSafe<GitHubComment[]>(
+        `/repos/${owner}/${repo.name}/issues/comments?sort=updated&direction=desc&per_page=15`,
+        pat,
+      )
+    : [];
 
   // Fetch PR review comments (code review quality)
-  const prReviewComments = await ghSafe<GitHubComment[]>(
-    `/repos/${owner}/${repo.name}/pulls/comments?sort=updated&direction=desc&per_page=15`,
-    pat,
-  );
+  const prReviewComments = s.commentsReviews
+    ? await ghSafe<GitHubComment[]>(
+        `/repos/${owner}/${repo.name}/pulls/comments?sort=updated&direction=desc&per_page=15`,
+        pat,
+      )
+    : [];
 
   // Truncate comment bodies
   for (const c of issueComments) c.body = truncate(c.body);
   for (const c of prReviewComments) c.body = truncate(c.body);
 
+  if (analyzed && s.commentsReviews) {
+    for (const c of issueComments.slice(0, MAX_TRACKED_COMMENTS_PER_CATEGORY)) {
+      analyzed.push({
+        label: `Comment by @${c.user?.login ?? 'unknown'}`,
+        url: c.html_url,
+        type: 'comment',
+      });
+    }
+    for (const c of prReviewComments.slice(
+      0,
+      MAX_TRACKED_COMMENTS_PER_CATEGORY,
+    )) {
+      analyzed.push({
+        label: `Review comment by @${c.user?.login ?? 'unknown'}`,
+        url: c.html_url,
+        type: 'comment',
+      });
+    }
+  }
+
   return {
     repo,
+    relation: 'owned' as RepoRelation,
     commits,
     files,
     tree,
@@ -585,7 +866,7 @@ async function fetchRepoDetail(
 
 // ---- File selection heuristics ----
 
-function pickInterestingFiles(tree: TreeEntry[]): string[] {
+export function pickInterestingFiles(tree: TreeEntry[]): string[] {
   const found: string[] = [];
 
   for (const entry of tree) {

@@ -2,6 +2,8 @@ import {
   fetchGitHubData,
   type GitHubData,
   type GitHubEvent,
+  type AnalysisScope,
+  type AnalysisMetadata,
 } from './github.ts';
 import { anthropicProvider } from './providers/anthropic.ts';
 import { openaiProvider } from './providers/openai.ts';
@@ -14,6 +16,12 @@ export interface AnalysisCallbacks {
   onChunk: (text: string) => void;
   onError: (err: string) => void;
   onDone: () => void;
+  onLog: (msg: string) => void;
+  onMetadata: (
+    metadata: AnalysisMetadata,
+    tokenEstimate: number,
+    costEstimate: string,
+  ) => void;
 }
 
 const providers: Record<ProviderId, LLMProvider> = {
@@ -22,12 +30,53 @@ const providers: Record<ProviderId, LLMProvider> = {
   gemini: geminiProvider,
 };
 
+// Max characters for PR/issue body in the deep-dive prompt section.
+// Bodies longer than this are truncated to save tokens.
+const MAX_DEEP_DIVE_BODY_LENGTH = 300;
+
+// Max files to show in the file tree before truncating.
+const MAX_FILE_TREE_ENTRIES = 60;
+
+// Log a progress update every N streaming chunks.
+const STREAM_LOG_INTERVAL = 50;
+
+// Rough pricing per 1M input tokens (USD)
+const INPUT_PRICING: Record<string, number> = {
+  // Anthropic
+  'claude-opus-4-20250514': 15.0,
+  'claude-sonnet-4-20250514': 3.0,
+  'claude-haiku-4-20250414': 0.8,
+  // OpenAI
+  'gpt-4o': 2.5,
+  'gpt-4o-mini': 0.15,
+  'gpt-4.1': 2.0,
+  'gpt-4.1-mini': 0.4,
+  // Gemini
+  'gemini-2.5-flash': 0.15,
+  'gemini-2.5-pro': 1.25,
+  'gemini-2.0-flash': 0.1,
+};
+
+export function estimateTokens(text: string): number {
+  // Rough estimate: ~4 characters per token for English text
+  return Math.ceil(text.length / 4);
+}
+
+export function estimateCost(tokens: number, model: string): string {
+  const pricePerMillion = INPUT_PRICING[model];
+  if (!pricePerMillion) return 'unknown';
+  const cost = (tokens / 1_000_000) * pricePerMillion;
+  if (cost < 0.001) return '<$0.001';
+  return `~$${cost.toFixed(3)}`;
+}
+
 function buildUserMessage(data: GitHubData): string {
   const parts: string[] = [];
 
   // ---- Profile ----
   const u = data.user;
   parts.push(`# GitHub Profile: ${u.login}`);
+  parts.push(`Profile: ${u.html_url}`);
   parts.push(`Name: ${u.name ?? 'not set'}`);
   parts.push(`Bio: ${u.bio ?? 'not set'}`);
   parts.push(`Company: ${u.company ?? 'not set'}`);
@@ -62,7 +111,7 @@ function buildUserMessage(data: GitHubData): string {
   if (xr.recentCommitRepos.length > 0) {
     parts.push('# Repos with recent commits (across all of GitHub)');
     for (const r of xr.recentCommitRepos) {
-      parts.push(`- ${r}`);
+      parts.push(`- ${r} (https://github.com/${r})`);
     }
     parts.push('');
   }
@@ -74,7 +123,10 @@ function buildUserMessage(data: GitHubData): string {
         'https://api.github.com/repos/',
         '',
       );
-      parts.push(`- [${pr.state}] ${repo}: ${pr.title} (${pr.created_at})`);
+      parts.push(
+        `- [${pr.state}] ${repo}: ` +
+          `[${pr.title}](${pr.html_url}) (${pr.created_at})`,
+      );
       if (pr.body) {
         parts.push(`  ${pr.body}`);
       }
@@ -91,7 +143,8 @@ function buildUserMessage(data: GitHubData): string {
       );
       const labels = issue.labels.map(l => l.name).join(', ');
       parts.push(
-        `- [${issue.state}] ${repo}: ${issue.title}` +
+        `- [${issue.state}] ${repo}: ` +
+          `[${issue.title}](${issue.html_url})` +
           (labels ? ` (${labels})` : '') +
           ` - ${issue.comments} comments`,
       );
@@ -111,7 +164,7 @@ function buildUserMessage(data: GitHubData): string {
     const pushed = r.pushed_at.slice(0, 10);
     const license = r.license?.spdx_id ?? 'no license';
     parts.push(
-      `- ${r.name} [${lang}] ${stars} stars, ` +
+      `- [${r.name}](${r.html_url}) [${lang}] ${stars} stars, ` +
         `last pushed ${pushed}, ${license}: ${desc}`,
     );
     if (r.topics.length > 0) {
@@ -120,10 +173,43 @@ function buildUserMessage(data: GitHubData): string {
   }
   parts.push('');
 
+  // ---- Forked repos (contributions to upstream) ----
+  if (data.forkedRepos.length > 0) {
+    parts.push('# Forked Repositories (contributions to other projects)');
+    for (const r of data.forkedRepos) {
+      const lang = r.language ?? 'unknown';
+      const pushed = r.pushed_at.slice(0, 10);
+      parts.push(
+        `- [${r.full_name}](${r.html_url}) [${lang}] ` +
+          `last pushed ${pushed}: ${r.description ?? 'no description'}`,
+      );
+    }
+    parts.push('');
+  }
+
+  // ---- Contributed repos (from events, not owned or forked) ----
+  if (data.contributedRepoNames.length > 0) {
+    parts.push(
+      '# Contributed Repositories ' +
+        '(repos the user is active in but does not own)',
+    );
+    for (const name of data.contributedRepoNames) {
+      parts.push(`- [${name}](https://github.com/${name})`);
+    }
+    parts.push('');
+  }
+
   // ---- Deep dives ----
   for (const detail of data.repoDetails) {
     const r = detail.repo;
-    parts.push(`# Deep Dive: ${r.full_name}`);
+    const relationLabel =
+      detail.relation === 'forked'
+        ? ' (FORK - contributing to upstream)'
+        : detail.relation === 'contributed'
+          ? ' (CONTRIBUTION - not owned by user)'
+          : '';
+    parts.push(`# Deep Dive: ${r.full_name}${relationLabel}`);
+    parts.push(`URL: ${r.html_url}`);
     parts.push(`Language: ${r.language ?? 'unknown'}`);
     parts.push(
       `Stars: ${r.stargazers_count}, Forks: ${r.forks_count}, ` +
@@ -134,12 +220,14 @@ function buildUserMessage(data: GitHubData): string {
 
     // File tree
     if (detail.tree.length > 0) {
-      parts.push('## File structure (first 60 files)');
-      for (const entry of detail.tree.slice(0, 60)) {
+      parts.push(`## File structure (first ${MAX_FILE_TREE_ENTRIES} files)`);
+      for (const entry of detail.tree.slice(0, MAX_FILE_TREE_ENTRIES)) {
         parts.push(`  ${entry.path}`);
       }
-      if (detail.tree.length > 60) {
-        parts.push(`  ... and ${detail.tree.length - 60} more files`);
+      if (detail.tree.length > MAX_FILE_TREE_ENTRIES) {
+        parts.push(
+          `  ... and ${detail.tree.length - MAX_FILE_TREE_ENTRIES} more files`,
+        );
       }
       parts.push('');
     }
@@ -150,7 +238,7 @@ function buildUserMessage(data: GitHubData): string {
       for (const c of detail.commits) {
         const msg = c.commit.message.split('\n')[0];
         const date = c.commit.author.date.slice(0, 10);
-        parts.push(`  - [${date}] ${msg}`);
+        parts.push(`  - [${date}] [${msg}](${c.html_url})`);
       }
       parts.push('');
     }
@@ -159,7 +247,10 @@ function buildUserMessage(data: GitHubData): string {
     if (detail.files.length > 0) {
       parts.push('## Source files');
       for (const f of detail.files) {
-        parts.push(`### ${f.path}`);
+        const fileUrl =
+          `https://github.com/${r.full_name}` +
+          `/blob/${r.default_branch}/${f.path}`;
+        parts.push(`### ${f.path} (${fileUrl})`);
         parts.push('```');
         parts.push(f.content);
         parts.push('```');
@@ -173,14 +264,17 @@ function buildUserMessage(data: GitHubData): string {
       for (const pr of detail.pullRequests) {
         const merged = pr.merged_at ? 'merged' : pr.state;
         parts.push(
-          `- #${pr.number} [${merged}] ${pr.title}` +
+          `- [#${pr.number} ${pr.title}](${pr.html_url})` +
+            ` [${merged}]` +
             ` (+${pr.additions}/-${pr.deletions}, ` +
             `${pr.changed_files} files, ` +
             `${pr.review_comments} review comments)`,
         );
         if (pr.body) {
           const body =
-            pr.body.length > 300 ? pr.body.slice(0, 300) + '...' : pr.body;
+            pr.body.length > MAX_DEEP_DIVE_BODY_LENGTH
+              ? pr.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
+              : pr.body;
           parts.push(`  Description: ${body}`);
         }
       }
@@ -193,14 +287,15 @@ function buildUserMessage(data: GitHubData): string {
       for (const issue of detail.issues) {
         const labels = issue.labels.map(l => l.name).join(', ');
         parts.push(
-          `- #${issue.number} [${issue.state}] ${issue.title}` +
+          `- [#${issue.number} ${issue.title}](${issue.html_url})` +
+            ` [${issue.state}]` +
             (labels ? ` (${labels})` : '') +
             ` - ${issue.comments} comments`,
         );
         if (issue.body) {
           const body =
-            issue.body.length > 300
-              ? issue.body.slice(0, 300) + '...'
+            issue.body.length > MAX_DEEP_DIVE_BODY_LENGTH
+              ? issue.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
               : issue.body;
           parts.push(`  Body: ${body}`);
         }
@@ -213,7 +308,9 @@ function buildUserMessage(data: GitHubData): string {
       parts.push('## Issue Comments (communication style)');
       for (const c of detail.issueComments) {
         const who = c.user?.login ?? 'unknown';
-        parts.push(`- [${c.created_at}] @${who}: ${c.body}`);
+        parts.push(
+          `- [${c.created_at}] @${who}: ` + `[${c.body}](${c.html_url})`,
+        );
       }
       parts.push('');
     }
@@ -223,7 +320,9 @@ function buildUserMessage(data: GitHubData): string {
       parts.push('## PR Review Comments (code review quality)');
       for (const c of detail.prReviewComments) {
         const who = c.user?.login ?? 'unknown';
-        parts.push(`- [${c.created_at}] @${who}: ${c.body}`);
+        parts.push(
+          `- [${c.created_at}] @${who}: ` + `[${c.body}](${c.html_url})`,
+        );
       }
       parts.push('');
     }
@@ -257,7 +356,8 @@ function summarizeEvents(events: GitHubEvent[]): string {
         .slice(0, 3)
         .map(c => c.message.split('\n')[0]);
       recentPushRepos.push(
-        `  [${date}] Pushed ${count} commit(s) to ${e.repo.name}: ${msgs.join('; ')}`,
+        `  [${date}] Pushed ${count} commit(s) to ` +
+          `${e.repo.name}: ${msgs.join('; ')}`,
       );
     }
 
@@ -267,7 +367,8 @@ function summarizeEvents(events: GitHubEvent[]): string {
         pull_request?: { title?: string };
       };
       recentPRActions.push(
-        `  [${date}] ${payload.action} PR in ${e.repo.name}: ${payload.pull_request?.title ?? ''}`,
+        `  [${date}] ${payload.action} PR in ${e.repo.name}: ` +
+          `${payload.pull_request?.title ?? ''}`,
       );
     }
 
@@ -277,7 +378,8 @@ function summarizeEvents(events: GitHubEvent[]): string {
         issue?: { title?: string };
       };
       recentIssueActions.push(
-        `  [${date}] ${payload.action} issue in ${e.repo.name}: ${payload.issue?.title ?? ''}`,
+        `  [${date}] ${payload.action} issue in ` +
+          `${e.repo.name}: ${payload.issue?.title ?? ''}`,
       );
     }
 
@@ -288,7 +390,9 @@ function summarizeEvents(events: GitHubEvent[]): string {
         pull_request?: { title?: string };
       };
       recentReviewActions.push(
-        `  [${date}] Reviewed PR in ${e.repo.name} (${payload.review?.state ?? ''}): ${payload.pull_request?.title ?? ''}`,
+        `  [${date}] Reviewed PR in ${e.repo.name}` +
+          ` (${payload.review?.state ?? ''}): ` +
+          `${payload.pull_request?.title ?? ''}`,
       );
     }
 
@@ -354,9 +458,13 @@ export async function analyze(
   model: string,
   languageId: string,
   githubPat: string | undefined,
+  scope: AnalysisScope,
+  customPersonality: string | undefined,
   callbacks: AnalysisCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
+  const log = callbacks.onLog;
+
   const tone = tones.find((t: Tone) => t.id === toneId);
   if (!tone) {
     callbacks.onError('Invalid tone selected');
@@ -369,31 +477,127 @@ export async function analyze(
     return;
   }
 
+  log(`Starting analysis for ${username}`);
+  log(`Provider: ${providerId}, Model: ${model}`);
+  log(`Tone: ${tone.label}, Language: ${languageId}`);
+  log(
+    `Scope: ${Object.entries(scope)
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+      .join(', ')}`,
+  );
+
   try {
+    log('Fetching GitHub data...');
     const data = await fetchGitHubData(
       username,
       githubPat || undefined,
-      callbacks.onProgress,
+      (msg: string) => {
+        callbacks.onProgress(msg);
+        log(msg);
+      },
+      scope,
     );
 
+    log(
+      `Fetched: ${data.recentEvents.length} events, ` +
+        `${data.ownedRepos.length} repos, ` +
+        `${data.repoDetails.length} deep dives`,
+    );
+
+    if (data.metadata.rateLimitRemaining !== null) {
+      log(
+        `GitHub API: ${data.metadata.rateLimitRemaining}` +
+          `/${data.metadata.rateLimitTotal} requests remaining` +
+          ` (resets at ${data.metadata.rateLimitReset})`,
+      );
+    }
+
     callbacks.onProgress('Streaming analysis...');
+    log('Building LLM prompt...');
 
     const userMessage = buildUserMessage(data);
-    const systemPrompt = buildSystemPrompt(tone, languageId);
+    const systemPrompt = buildSystemPrompt(tone, languageId, customPersonality);
+    const totalText = systemPrompt + userMessage;
+    const tokens = estimateTokens(totalText);
+    const cost = estimateCost(tokens, model);
+
+    log(
+      `Prompt size: ${totalText.length} chars, ` +
+        `~${tokens.toLocaleString()} tokens`,
+    );
+    log(`Estimated input cost: ${cost}`);
+
+    // Context window limits (approximate input limits)
+    const MODEL_LIMITS: Record<string, number> = {
+      'claude-opus-4-20250514': 200000,
+      'claude-sonnet-4-20250514': 200000,
+      'claude-haiku-4-20250414': 200000,
+      'gpt-4o': 128000,
+      'gpt-4o-mini': 128000,
+      'gpt-4.1': 1000000,
+      'gpt-4.1-mini': 1000000,
+      'gemini-2.5-flash': 1000000,
+      'gemini-2.5-pro': 1000000,
+      'gemini-2.0-flash': 1000000,
+    };
+    const limit = MODEL_LIMITS[model];
+    if (limit && tokens > limit * 0.9) {
+      const msg =
+        `WARNING: Input is ~${tokens.toLocaleString()} tokens, ` +
+        `close to the ${limit.toLocaleString()} token limit for ` +
+        `${model}. The analysis may be truncated or fail. ` +
+        `Try reducing the scope.`;
+      log(msg);
+      callbacks.onProgress(msg);
+    } else if (tokens > 50000) {
+      log(
+        `Note: Large prompt (${tokens.toLocaleString()} tokens). ` +
+          `Streaming may take a while.`,
+      );
+    }
+
+    callbacks.onMetadata(data.metadata, tokens, cost);
+
+    log(`Streaming from ${providerId} (${model})...`);
+
+    let chunkCount = 0;
+    let totalChars = 0;
 
     await provider.stream(
       systemPrompt,
       userMessage,
       apiKey,
       model,
-      callbacks.onChunk,
+      (text: string) => {
+        chunkCount++;
+        totalChars += text.length;
+        if (chunkCount === 1) {
+          log('Received first chunk from LLM.');
+        }
+        if (chunkCount % STREAM_LOG_INTERVAL === 0) {
+          log(
+            `Streaming: ${chunkCount} chunks, ` +
+              `~${totalChars} chars received`,
+          );
+        }
+        callbacks.onChunk(text);
+      },
       signal,
     );
 
+    log(
+      `Analysis complete. Received ${chunkCount} chunks, ` +
+        `${totalChars} chars total.`,
+    );
     callbacks.onDone();
   } catch (err) {
-    if (signal?.aborted) return;
+    if (signal?.aborted) {
+      log('Analysis cancelled by user.');
+      return;
+    }
     const msg = err instanceof Error ? err.message : 'Unknown error occurred';
+    log(`ERROR: ${msg}`);
     callbacks.onError(msg);
   }
 }

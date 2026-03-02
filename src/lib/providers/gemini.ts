@@ -24,7 +24,7 @@ export const geminiProvider: LLMProvider = {
           },
         ],
         generationConfig: {
-          maxOutputTokens: 4096,
+          maxOutputTokens: 16384,
         },
       }),
       signal,

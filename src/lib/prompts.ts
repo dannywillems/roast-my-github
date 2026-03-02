@@ -115,11 +115,35 @@ them feel good about their progress while giving them a clear path forward.`,
   },
 ];
 
-export function buildSystemPrompt(tone: Tone, languageId: string): string {
+const EVIDENCE_INSTRUCTION = `
+
+IMPORTANT - EVIDENCE AND LINKS:
+The data provided contains markdown links in the format [text](url) for
+commits, PRs, issues, comments, files, and repos. When making a claim about
+the developer, you MUST include the relevant markdown link as evidence. For
+example, instead of saying "their commit messages are good", say "their commit
+messages are descriptive, e.g. [fix: resolve race condition in auth
+flow](https://github.com/...)". Every claim should be backed by a clickable
+link so the reader can verify it. Use the URLs exactly as provided in the data.
+Format your entire response in markdown.`;
+
+export function buildSystemPrompt(
+  tone: Tone,
+  languageId: string,
+  customPersonality?: string,
+): string {
   const lang = languages.find(l => l.id === languageId);
   const langInstruction =
     lang && lang.id !== 'en'
       ? `\n\nIMPORTANT: Write your entire response in ${lang.label} (${lang.nativeName}).`
       : '';
-  return tone.systemPrompt + langInstruction;
+  const personalityInstruction = customPersonality?.trim()
+    ? `\n\nADDITIONAL PERSONALITY INSTRUCTIONS FROM THE USER: ${customPersonality.trim()}`
+    : '';
+  return (
+    tone.systemPrompt +
+    EVIDENCE_INSTRUCTION +
+    langInstruction +
+    personalityInstruction
+  );
 }

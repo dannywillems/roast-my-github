@@ -16,7 +16,7 @@ export const anthropicProvider: LLMProvider = {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: 16384,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
         stream: true,
@@ -36,31 +36,46 @@ export const anthropicProvider: LLMProvider = {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6);
-        if (data === '[DONE]') return;
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          if (data === '[DONE]') return;
 
-        try {
-          const event = JSON.parse(data);
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta?.type === 'text_delta'
-          ) {
-            onChunk(event.delta.text);
+          try {
+            const event = JSON.parse(data);
+            if (
+              event.type === 'content_block_delta' &&
+              event.delta?.type === 'text_delta'
+            ) {
+              onChunk(event.delta.text);
+            }
+          } catch {
+            // skip malformed JSON lines
           }
-        } catch {
-          // skip malformed JSON lines
         }
       }
+    } catch (err) {
+      // Re-throw unless it was an abort
+      if (signal?.aborted) return;
+      const msg = err instanceof Error ? err.message : 'Connection error';
+      if (msg.includes('NetworkError') || msg.includes('network')) {
+        throw new Error(
+          'Connection lost during streaming. ' +
+            'This can happen with very large analyses. ' +
+            'Try reducing the analysis scope or using a ' +
+            'different network.',
+        );
+      }
+      throw err;
     }
   },
 };

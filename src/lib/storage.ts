@@ -56,3 +56,39 @@ export function getLanguage(): string {
 export function setLanguage(lang: string): void {
   set('roast_language', lang);
 }
+
+// TTS provider
+export function getTTSProvider(): string {
+  return get('roast_tts_provider') || 'browser';
+}
+
+export function setTTSProvider(id: string): void {
+  set('roast_tts_provider', id);
+}
+
+// TTS API keys
+export function getTTSKey(provider: string): string {
+  return get(`roast_tts_key_${provider}`);
+}
+
+export function setTTSKey(provider: string, key: string): void {
+  set(`roast_tts_key_${provider}`, key);
+}
+
+// TTS voice
+export function getTTSVoice(provider: string): string {
+  return get(`roast_tts_voice_${provider}`);
+}
+
+export function setTTSVoice(provider: string, voice: string): void {
+  set(`roast_tts_voice_${provider}`, voice);
+}
+
+// Custom personality
+export function getCustomPersonality(): string {
+  return get('roast_custom_personality');
+}
+
+export function setCustomPersonality(personality: string): void {
+  set('roast_custom_personality', personality);
+}

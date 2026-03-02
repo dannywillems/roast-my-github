@@ -29,6 +29,18 @@ check-format: ## Check formatting
 format: ## Format code
 	npx prettier --write .
 
+.PHONY: lint
+lint: ## Lint code (svelte-check + TypeScript)
+	npx svelte-check --tsconfig ./tsconfig.json
+
+.PHONY: test
+test: ## Run unit tests
+	npx vitest run
+
+.PHONY: test-watch
+test-watch: ## Run unit tests in watch mode
+	npx vitest
+
 .PHONY: clean
 clean: ## Clean build artifacts
 	rm -rf build .svelte-kit
