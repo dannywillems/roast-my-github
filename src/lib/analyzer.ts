@@ -68,18 +68,24 @@ const STREAM_LOG_INTERVAL = 50;
 // Rough pricing per 1M input tokens (USD)
 const INPUT_PRICING: Record<string, number> = {
   // Anthropic
+  'claude-opus-4-6-20250610': 15.0,
+  'claude-sonnet-4-6-20250610': 3.0,
   'claude-opus-4-20250514': 15.0,
   'claude-sonnet-4-20250514': 3.0,
   'claude-haiku-4-5-20251001': 0.8,
   // OpenAI
-  'gpt-4o': 2.5,
-  'gpt-4o-mini': 0.15,
+  'o3': 10.0,
+  'o4-mini': 1.1,
   'gpt-4.1': 2.0,
   'gpt-4.1-mini': 0.4,
+  'gpt-4.1-nano': 0.1,
+  'gpt-4o': 2.5,
+  'gpt-4o-mini': 0.15,
   // Gemini
   'gemini-2.5-flash': 0.15,
   'gemini-2.5-pro': 1.25,
   'gemini-2.0-flash': 0.1,
+  'gemini-3-flash-preview': 0.15,
 };
 
 export function estimateTokens(text: string): number {
@@ -602,16 +608,22 @@ export async function analyze(
 
     // Context window limits
     const MODEL_LIMITS: Record<string, number> = {
+      'claude-opus-4-6-20250610': 200000,
+      'claude-sonnet-4-6-20250610': 200000,
       'claude-opus-4-20250514': 200000,
       'claude-sonnet-4-20250514': 200000,
       'claude-haiku-4-5-20251001': 200000,
-      'gpt-4o': 128000,
-      'gpt-4o-mini': 128000,
+      'o3': 200000,
+      'o4-mini': 200000,
       'gpt-4.1': 1000000,
       'gpt-4.1-mini': 1000000,
+      'gpt-4.1-nano': 1000000,
+      'gpt-4o': 128000,
+      'gpt-4o-mini': 128000,
       'gemini-2.5-flash': 1000000,
       'gemini-2.5-pro': 1000000,
       'gemini-2.0-flash': 1000000,
+      'gemini-3-flash-preview': 1000000,
     };
     const limit = MODEL_LIMITS[model];
     if (limit && tokens > limit * 0.9) {

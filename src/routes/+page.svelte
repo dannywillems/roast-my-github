@@ -81,8 +81,8 @@
     gemini: getApiKey('gemini'),
   });
   let models = $state<Record<ProviderId, string>>({
-    anthropic: getModel('anthropic') || 'claude-sonnet-4-20250514',
-    openai: getModel('openai') || 'gpt-4o',
+    anthropic: getModel('anthropic') || 'claude-sonnet-4-6-20250610',
+    openai: getModel('openai') || 'gpt-4.1',
     gemini: getModel('gemini') || 'gemini-2.5-flash',
   });
 
