@@ -70,7 +70,7 @@ const INPUT_PRICING: Record<string, number> = {
   // Anthropic
   'claude-opus-4-20250514': 15.0,
   'claude-sonnet-4-20250514': 3.0,
-  'claude-haiku-4-20250414': 0.8,
+  'claude-haiku-4-5-20251001': 0.8,
   // OpenAI
   'gpt-4o': 2.5,
   'gpt-4o-mini': 0.15,
@@ -604,7 +604,7 @@ export async function analyze(
     const MODEL_LIMITS: Record<string, number> = {
       'claude-opus-4-20250514': 200000,
       'claude-sonnet-4-20250514': 200000,
-      'claude-haiku-4-20250414': 200000,
+      'claude-haiku-4-5-20251001': 200000,
       'gpt-4o': 128000,
       'gpt-4o-mini': 128000,
       'gpt-4.1': 1000000,

@@ -29,7 +29,7 @@ export const providerConfigs: ProviderConfig[] = [
     models: [
       { id: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
       { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-      { id: 'claude-haiku-4-20250414', label: 'Claude Haiku 4' },
+      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
     ],
     defaultModel: 'claude-sonnet-4-20250514',
     keyPlaceholder: 'sk-ant-...',
