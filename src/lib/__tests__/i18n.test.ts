@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { t } from '../i18n.ts';
+import { t } from '../i18n/index.ts';
 
 describe('i18n', () => {
   it('returns English translations for en', () => {
@@ -11,7 +11,7 @@ describe('i18n', () => {
   it('returns French translations for fr', () => {
     const i = t('fr');
     expect(i.analyze).toBe('Analyser');
-    expect(i.settings).toBe('Parametres');
+    expect(i.settings).toBe('Param\u00e8tres');
     expect(i.footerPrivacy).toContain('navigateur');
   });
 
@@ -44,7 +44,7 @@ describe('i18n', () => {
   });
 
   it('all languages have required keys', () => {
-    const langs = ['en', 'fr', 'es', 'pt', 'de', 'it', 'nl', 'ja', 'ko', 'zh'];
+    const langs = ['en', 'fr', 'es', 'pt', 'de', 'it', 'nl'];
     for (const lang of langs) {
       const i = t(lang);
       expect(i.appName).toBeTruthy();
@@ -54,6 +54,8 @@ describe('i18n', () => {
       expect(i.heroTitle).toBeTruthy();
       expect(i.chooseTone).toBeTruthy();
       expect(i.footerPrivacy).toBeTruthy();
+      expect(i.toneRecruiterLabel).toBeTruthy();
+      expect(i.toneRoastLabel).toBeTruthy();
     }
   });
 });

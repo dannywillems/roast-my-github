@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tones, toneCategories, type Tone } from '$lib/prompts';
   import { t } from '$lib/i18n';
+  import type { Translations } from '$lib/i18n';
 
   let {
     selected = $bindable('recruiter'),
@@ -11,6 +12,42 @@
   } = $props();
 
   let i = $derived(t(language));
+
+  // Map tone id to i18n label/desc keys
+  const toneI18nKeys: Record<
+    string,
+    { label: keyof Translations; desc: keyof Translations }
+  > = {
+    recruiter: { label: 'toneRecruiterLabel', desc: 'toneRecruiterDesc' },
+    interviewer: { label: 'toneInterviewerLabel', desc: 'toneInterviewerDesc' },
+    senior: { label: 'toneSeniorLabel', desc: 'toneSeniorDesc' },
+    coworker: { label: 'toneCoworkerLabel', desc: 'toneCoworkerDesc' },
+    mentor: { label: 'toneMentorLabel', desc: 'toneMentorDesc' },
+    investor: { label: 'toneInvestorLabel', desc: 'toneInvestorDesc' },
+    roast: { label: 'toneRoastLabel', desc: 'toneRoastDesc' },
+    detective: { label: 'toneDetectiveLabel', desc: 'toneDetectiveDesc' },
+    sportscaster: {
+      label: 'toneSportscasterLabel',
+      desc: 'toneSportscasterDesc',
+    },
+    therapist: { label: 'toneTherapistLabel', desc: 'toneTherapistDesc' },
+    pirate: { label: 'tonePirateLabel', desc: 'tonePirateDesc' },
+    dungeon_master: {
+      label: 'toneDungeonMasterLabel',
+      desc: 'toneDungeonMasterDesc',
+    },
+    foodcritic: { label: 'toneFoodCriticLabel', desc: 'toneFoodCriticDesc' },
+  };
+
+  function toneLabel(tone: Tone): string {
+    const keys = toneI18nKeys[tone.id];
+    return keys ? i[keys.label] : tone.label;
+  }
+
+  function toneDesc(tone: Tone): string {
+    const keys = toneI18nKeys[tone.id];
+    return keys ? i[keys.desc] : tone.description;
+  }
 
   let categoryLabels = $derived<
     Record<string, { label: string; desc: string }>
@@ -82,14 +119,14 @@
                     : 'text-violet-700 dark:text-violet-300'
                   : 'text-zinc-800 dark:text-zinc-200'}"
               >
-                {tone.label}
+                {toneLabel(tone)}
               </span>
             </div>
             <div
               class="mt-0.5 pl-6 text-[11px] leading-tight
                      text-zinc-500 dark:text-zinc-400"
             >
-              {tone.description}
+              {toneDesc(tone)}
             </div>
           </button>
         {/each}

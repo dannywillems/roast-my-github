@@ -34,15 +34,12 @@ export interface Language {
 
 export const languages: Language[] = [
   { id: 'en', label: 'English', nativeName: 'English' },
-  { id: 'fr', label: 'French', nativeName: 'Francais' },
-  { id: 'pt', label: 'Portuguese', nativeName: 'Portugues' },
+  { id: 'fr', label: 'French', nativeName: 'Fran\u00e7ais' },
+  { id: 'pt', label: 'Portuguese', nativeName: 'Portugu\u00eas' },
   { id: 'de', label: 'German', nativeName: 'Deutsch' },
   { id: 'nl', label: 'Dutch', nativeName: 'Nederlands' },
-  { id: 'es', label: 'Spanish', nativeName: 'Espanol' },
+  { id: 'es', label: 'Spanish', nativeName: 'Espa\u00f1ol' },
   { id: 'it', label: 'Italian', nativeName: 'Italiano' },
-  { id: 'ja', label: 'Japanese', nativeName: 'Nihongo' },
-  { id: 'ko', label: 'Korean', nativeName: 'Hangugeo' },
-  { id: 'zh', label: 'Chinese', nativeName: 'Zhongwen' },
 ];
 
 export const tones: Tone[] = [

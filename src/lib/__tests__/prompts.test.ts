@@ -90,7 +90,7 @@ describe('buildSystemPrompt', () => {
     const result = buildSystemPrompt(recruiter, 'fr');
     expect(result).toContain(recruiter.systemPrompt);
     expect(result).toContain('French');
-    expect(result).toContain('Francais');
+    expect(result).toContain('Fran\u00e7ais');
   });
 
   it('does not append language instruction for English', () => {
