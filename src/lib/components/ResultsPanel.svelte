@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { marked } from 'marked';
+  import { Marked } from 'marked';
   import TTSControls from './TTSControls.svelte';
 
   let {
@@ -19,9 +19,22 @@
   type TabId = 'rendered' | 'markdown';
   let activeTab: TabId = $state('rendered');
 
+  // Custom marked instance: open links in new tabs
+  const renderer = {
+    link({ href, text }: { href: string; text: string }): string {
+      const safeHref = href ?? '#';
+      return (
+        `<a href="${safeHref}" target="_blank" ` +
+        `rel="noopener noreferrer">${text}</a>`
+      );
+    },
+  };
+
+  const md = new Marked({ renderer, breaks: true, gfm: true });
+
   let renderedHtml = $derived.by(() => {
     if (!content) return '';
-    return marked.parse(content, { async: false }) as string;
+    return md.parse(content, { async: false }) as string;
   });
 </script>
 
@@ -89,20 +102,36 @@
 
       <!-- Tab content -->
       {#if activeTab === 'rendered'}
-        <div
+        <article
           class="prose prose-zinc max-w-none dark:prose-invert
                  prose-a:text-blue-600 prose-a:underline
+                 prose-a:decoration-blue-400/50
+                 hover:prose-a:decoration-blue-600
                  dark:prose-a:text-blue-400
-                 prose-headings:mt-6 prose-headings:mb-2
-                 prose-p:my-2 prose-li:my-0.5
+                 dark:prose-a:decoration-blue-500/50
+                 prose-headings:border-b prose-headings:border-zinc-200
+                 prose-headings:pb-2 dark:prose-headings:border-zinc-700
+                 prose-h2:mt-8 prose-h2:mb-4 prose-h2:text-xl
+                 prose-h3:mt-6 prose-h3:mb-3 prose-h3:text-lg
+                 prose-p:my-3 prose-p:leading-7
+                 prose-ul:my-3 prose-li:my-1
+                 prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100
                  prose-code:rounded prose-code:bg-zinc-100
-                 prose-code:px-1 prose-code:py-0.5
+                 prose-code:px-1.5 prose-code:py-0.5
+                 prose-code:text-pink-600
                  dark:prose-code:bg-zinc-700
-                 prose-pre:bg-zinc-50 dark:prose-pre:bg-zinc-900
-                 text-sm leading-relaxed"
+                 dark:prose-code:text-pink-400
+                 prose-pre:bg-zinc-50 prose-pre:border
+                 prose-pre:border-zinc-200
+                 dark:prose-pre:bg-zinc-900
+                 dark:prose-pre:border-zinc-700
+                 prose-blockquote:border-blue-500
+                 prose-blockquote:bg-blue-50/50
+                 dark:prose-blockquote:bg-blue-950/30
+                 prose-hr:border-zinc-300 dark:prose-hr:border-zinc-600"
         >
           {@html renderedHtml}
-        </div>
+        </article>
       {:else}
         <div
           class="whitespace-pre-wrap text-sm leading-relaxed

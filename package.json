@@ -23,6 +23,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "marked": "^17.0.3"
   }
 }
