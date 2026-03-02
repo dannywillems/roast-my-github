@@ -11,6 +11,7 @@
   import LanguageSelector from '$lib/components/LanguageSelector.svelte';
   import PlatformIcon from '$lib/components/PlatformIcon.svelte';
   import { t } from '$lib/i18n';
+  import { languages } from '$lib/prompts';
   import { analyze, followUpAnalyze } from '$lib/analyzer';
   import {
     defaultScope,
@@ -107,6 +108,13 @@
 
   // Advanced options toggle
   let showAdvanced = $state(false);
+
+  // Language switcher dropdown
+  let showLangMenu = $state(false);
+  let allLanguages = languages;
+  let currentLangLabel = $derived(
+    languages.find(l => l.id === language)?.nativeName ?? 'English',
+  );
 
   // Persist all settings
   $effect(() => setProvider(provider));
@@ -345,6 +353,56 @@
         </span>
       </div>
       <div class="flex items-center gap-2">
+        <!-- Language switcher -->
+        <div class="relative">
+          <button
+            type="button"
+            onclick={() => (showLangMenu = !showLangMenu)}
+            class="rounded-lg border border-zinc-200 px-2.5 py-1.5
+                   text-xs font-medium text-zinc-600 transition-colors
+                   hover:border-zinc-300 hover:text-zinc-800
+                   dark:border-zinc-700 dark:text-zinc-400
+                   dark:hover:border-zinc-600 dark:hover:text-zinc-200"
+            title={i.responseLang}
+          >
+            {currentLangLabel}
+          </button>
+          {#if showLangMenu}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="fixed inset-0 z-40"
+              onclick={() => (showLangMenu = false)}
+              onkeydown={() => {}}
+            ></div>
+            <div
+              class="absolute right-0 top-full z-50 mt-1 w-44
+                     rounded-lg border border-zinc-200 bg-white
+                     py-1 shadow-lg
+                     dark:border-zinc-700 dark:bg-zinc-800"
+            >
+              {#each allLanguages as lang (lang.id)}
+                <button
+                  type="button"
+                  onclick={() => {
+                    language = lang.id;
+                    showLangMenu = false;
+                  }}
+                  class="flex w-full items-center justify-between
+                         px-3 py-1.5 text-left text-xs
+                         transition-colors
+                         {language === lang.id
+                    ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                    : 'text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-700'}"
+                >
+                  <span>{lang.label}</span>
+                  <span class="text-zinc-400 dark:text-zinc-500">
+                    {lang.nativeName}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
         <ThemeToggle />
         <button
           type="button"
