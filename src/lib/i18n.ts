@@ -628,86 +628,344 @@ const it: Translations = {
   hideLogs: 'Nascondi log',
 };
 
-// For languages with complex scripts, provide simplified versions
 const nl: Translations = {
-  ...en,
+  appName: 'Roast My GitHub',
   settings: 'Instellingen',
+
   heroTitle: 'AI-aangedreven ontwikkelaarsprofiel',
   heroSubtitle:
     'Analyseer elke ontwikkelaar op GitHub, GitLab, Codeberg en ' +
-    'Bitbucket. Krijg gestructureerde beoordelingen of creatieve ' +
-    'analyses met AI.',
+    'Bitbucket. Krijg gestructureerde beoordelingen, comedy-roasts ' +
+    'of creatieve analyses met AI.',
+
+  selectPlatform: 'Selecteer minstens een platform.',
   chooseTone: 'Kies een toon',
   categoryProfessional: 'Professioneel',
+  categoryProfessionalDesc:
+    'Gestructureerde beoordelingen voor werving en groei',
   categoryFun: 'Leuk & Creatief',
+  categoryFunDesc: 'Vermakelijke analyses van je code',
+
   advancedOptions: 'Geavanceerde opties',
+  responseLang: 'Antwoordtaal',
+  whatToAnalyze: 'Wat analyseren',
+  customPersonality: 'Aangepaste persoonlijkheidsinstructies',
+  customPersonalityPlaceholder:
+    "bijv. 'Focus op beveiligingspraktijken' of " +
+    "'Wees extra sarcastisch over JS-frameworks'",
+
+  scopeRecentActivity: 'Recente activiteit (90 dagen)',
+  scopeSourceCode: 'Broncode',
+  scopeCommitMessages: 'Commit-berichten',
+  scopePullRequests: 'Pull requests',
+  scopeIssues: 'Issues',
+  scopeCommentsReviews: 'Commentaren & reviews',
+  scopeCrossRepo: 'Cross-repo-bijdragen',
+
   analyze: 'Analyseren',
   analyzing: 'Bezig met analyseren...',
   cancel: 'Annuleren',
+  via: 'via',
+
   goDeeper: 'Verdiepen',
+  askCustom: 'Stel een vervolgvraag...',
+  ask: 'Vraag',
+  last30Days: 'Laatste 30 dagen',
+  last90Days: 'Laatste 90 dagen',
+  codeReviewStyle: 'Code-review-stijl',
+  issueCommunication: 'Issue-communicatie',
+  comparePlatforms: 'Platforms vergelijken',
+  collaboration: 'Samenwerking',
+
   conversation: 'Gesprek',
+  export_: 'Exporteren',
   clear: 'Wissen',
+  initial: 'Initieel',
+  followUp: 'Vervolg',
+
+  markdownExport: 'Markdown (.md)',
+  plainTextExport: 'Platte tekst (.txt)',
+  htmlExport: 'HTML (.html)',
+  printPdf: 'Afdrukken / PDF',
+
+  rendered: 'Weergave',
+  markdown: 'Markdown',
+
+  llmProvider: 'LLM-aanbieder',
+  model: 'Model',
+  platformTokens: 'Platformtokens',
+  platformTokensOptional: '(optioneel, aanbevolen)',
+  whyTokens: 'Waarom tokens gebruiken?',
+  whyTokensBody:
+    'Zonder tokens beperken platforms API-verzoeken. ' +
+    'Met tokens krijgt u meer gegevens.',
+  keysLocalStorage:
+    'Alle sleutels worden in uw browser opgeslagen en ' +
+    'nooit naar een server verzonden behalve de betreffende API.',
+
   footerPrivacy: 'Alle gegevens blijven in uw browser',
+
+  apiCalls: 'API-aanroepen',
+  remaining: 'resterend',
+  items: 'items',
+  tokens: 'tokens',
+  estCost: 'Gesch.',
+  showAnalyzed: 'Geanalyseerde items tonen',
+  hideAnalyzed: 'Geanalyseerde items verbergen',
+  showLogs: 'Logs tonen',
+  hideLogs: 'Logs verbergen',
 };
 
 const ja: Translations = {
-  ...en,
+  appName: 'Roast My GitHub',
   settings: '設定',
+
   heroTitle: 'AI開発者プロファイリング',
   heroSubtitle:
     'GitHub、GitLab、Codeberg、Bitbucketの開発者を分析。' +
     'AIによる構造化評価やクリエイティブな分析を取得。',
+
+  selectPlatform: 'プラットフォームを1つ以上選択してください。',
   chooseTone: 'トーンを選択',
   categoryProfessional: 'プロフェッショナル',
+  categoryProfessionalDesc: '採用と成長のための構造化評価',
   categoryFun: '楽しい＆クリエイティブ',
+  categoryFunDesc: 'コードの面白い分析',
+
   advancedOptions: '詳細オプション',
+  responseLang: '回答言語',
+  whatToAnalyze: '分析対象',
+  customPersonality: 'カスタム指示',
+  customPersonalityPlaceholder:
+    "例: 'セキュリティに注目' や " + "'JSフレームワークについて皮肉を込めて'",
+
+  scopeRecentActivity: '最近のアクティビティ (90日間)',
+  scopeSourceCode: 'ソースコード',
+  scopeCommitMessages: 'コミットメッセージ',
+  scopePullRequests: 'プルリクエスト',
+  scopeIssues: 'イシュー',
+  scopeCommentsReviews: 'コメント＆レビュー',
+  scopeCrossRepo: 'クロスリポジトリ貢献',
+
   analyze: '分析',
   analyzing: '分析中...',
   cancel: 'キャンセル',
+  via: 'via',
+
   goDeeper: '深掘り',
+  askCustom: 'フォローアップ質問を入力...',
+  ask: '質問',
+  last30Days: '過去30日間',
+  last90Days: '過去90日間',
+  codeReviewStyle: 'コードレビュースタイル',
+  issueCommunication: 'イシューコミュニケーション',
+  comparePlatforms: 'プラットフォーム比較',
+  collaboration: 'コラボレーション',
+
   conversation: '会話',
+  export_: 'エクスポート',
   clear: 'クリア',
+  initial: '初回',
+  followUp: 'フォローアップ',
+
+  markdownExport: 'Markdown (.md)',
+  plainTextExport: 'テキスト (.txt)',
+  htmlExport: 'HTML (.html)',
+  printPdf: '印刷 / PDF',
+
+  rendered: 'レンダリング',
+  markdown: 'Markdown',
+
+  llmProvider: 'LLMプロバイダー',
+  model: 'モデル',
+  platformTokens: 'プラットフォームトークン',
+  platformTokensOptional: '(任意、推奨)',
+  whyTokens: 'トークンを使う理由',
+  whyTokensBody:
+    'トークンなしではプラットフォームがAPIリクエストを制限します。' +
+    'トークンを使うとより多くのデータを取得できます。',
+  keysLocalStorage:
+    '全てのキーはブラウザに保存され、' +
+    '各APIを除きサーバーに送信されることはありません。',
+
   footerPrivacy: '全てのデータはブラウザ内に保存されます',
+
+  apiCalls: 'API呼び出し',
+  remaining: '残り',
+  items: '項目',
+  tokens: 'トークン',
+  estCost: '推定',
+  showAnalyzed: '分析項目を表示',
+  hideAnalyzed: '分析項目を非表示',
+  showLogs: 'ログを表示',
+  hideLogs: 'ログを非表示',
 };
 
 const ko: Translations = {
-  ...en,
+  appName: 'Roast My GitHub',
   settings: '설정',
+
   heroTitle: 'AI 개발자 프로파일링',
   heroSubtitle:
     'GitHub, GitLab, Codeberg, Bitbucket의 개발자를 분석하세요. ' +
     'AI 기반 구조화된 평가와 창의적 분석을 받으세요.',
+
+  selectPlatform: '플랫폼을 하나 이상 선택하세요.',
   chooseTone: '톤 선택',
   categoryProfessional: '전문적',
+  categoryProfessionalDesc: '채용과 성장을 위한 구조화된 평가',
   categoryFun: '재미 & 창의적',
+  categoryFunDesc: '코드에 대한 재미있는 분석',
+
   advancedOptions: '고급 옵션',
+  responseLang: '응답 언어',
+  whatToAnalyze: '분석 대상',
+  customPersonality: '사용자 지정 지시',
+  customPersonalityPlaceholder:
+    "예: '보안 관행에 집중' 또는 " + "'JS 프레임워크에 대해 비꼬아주세요'",
+
+  scopeRecentActivity: '최근 활동 (90일)',
+  scopeSourceCode: '소스 코드',
+  scopeCommitMessages: '커밋 메시지',
+  scopePullRequests: '풀 리퀘스트',
+  scopeIssues: '이슈',
+  scopeCommentsReviews: '댓글 & 리뷰',
+  scopeCrossRepo: '크로스 레포 기여',
+
   analyze: '분석',
   analyzing: '분석 중...',
   cancel: '취소',
+  via: 'via',
+
   goDeeper: '심층 분석',
+  askCustom: '후속 질문을 입력하세요...',
+  ask: '질문',
+  last30Days: '최근 30일',
+  last90Days: '최근 90일',
+  codeReviewStyle: '코드 리뷰 스타일',
+  issueCommunication: '이슈 커뮤니케이션',
+  comparePlatforms: '플랫폼 비교',
+  collaboration: '협업',
+
   conversation: '대화',
+  export_: '내보내기',
   clear: '지우기',
+  initial: '초기',
+  followUp: '후속',
+
+  markdownExport: 'Markdown (.md)',
+  plainTextExport: '텍스트 (.txt)',
+  htmlExport: 'HTML (.html)',
+  printPdf: '인쇄 / PDF',
+
+  rendered: '렌더링',
+  markdown: 'Markdown',
+
+  llmProvider: 'LLM 제공자',
+  model: '모델',
+  platformTokens: '플랫폼 토큰',
+  platformTokensOptional: '(선택 사항, 권장)',
+  whyTokens: '토큰을 사용하는 이유',
+  whyTokensBody:
+    '토큰 없이는 플랫폼이 API 요청을 제한합니다. ' +
+    '토큰을 사용하면 더 많은 데이터를 가져올 수 있습니다.',
+  keysLocalStorage:
+    '모든 키는 브라우저에 저장되며 ' +
+    '각 API를 제외하고 서버로 전송되지 않습니다.',
+
   footerPrivacy: '모든 데이터는 브라우저에 저장됩니다',
+
+  apiCalls: 'API 호출',
+  remaining: '남은',
+  items: '항목',
+  tokens: '토큰',
+  estCost: '추정',
+  showAnalyzed: '분석 항목 표시',
+  hideAnalyzed: '분석 항목 숨기기',
+  showLogs: '로그 표시',
+  hideLogs: '로그 숨기기',
 };
 
 const zh: Translations = {
-  ...en,
+  appName: 'Roast My GitHub',
   settings: '设置',
+
   heroTitle: 'AI开发者分析',
   heroSubtitle:
     '分析GitHub、GitLab、Codeberg和Bitbucket上的任何开发者。' +
     '获取AI驱动的结构化评估或创意分析。',
+
+  selectPlatform: '请至少选择一个平台。',
   chooseTone: '选择风格',
   categoryProfessional: '专业',
+  categoryProfessionalDesc: '用于招聘和成长的结构化评估',
   categoryFun: '趣味 & 创意',
+  categoryFunDesc: '关于代码的有趣分析',
+
   advancedOptions: '高级选项',
+  responseLang: '回复语言',
+  whatToAnalyze: '分析内容',
+  customPersonality: '自定义指令',
+  customPersonalityPlaceholder:
+    "例如: '关注安全实践' 或 " + "'对JS框架多些讽刺'",
+
+  scopeRecentActivity: '近期活动 (90天)',
+  scopeSourceCode: '源代码',
+  scopeCommitMessages: '提交信息',
+  scopePullRequests: 'Pull requests',
+  scopeIssues: 'Issues',
+  scopeCommentsReviews: '评论 & 审查',
+  scopeCrossRepo: '跨仓库贡献',
+
   analyze: '分析',
   analyzing: '分析中...',
   cancel: '取消',
+  via: 'via',
+
   goDeeper: '深入分析',
+  askCustom: '输入后续问题...',
+  ask: '提问',
+  last30Days: '最近30天',
+  last90Days: '最近90天',
+  codeReviewStyle: '代码审查风格',
+  issueCommunication: 'Issue沟通',
+  comparePlatforms: '平台对比',
+  collaboration: '协作',
+
   conversation: '对话',
+  export_: '导出',
   clear: '清除',
+  initial: '初始',
+  followUp: '后续',
+
+  markdownExport: 'Markdown (.md)',
+  plainTextExport: '纯文本 (.txt)',
+  htmlExport: 'HTML (.html)',
+  printPdf: '打印 / PDF',
+
+  rendered: '渲染',
+  markdown: 'Markdown',
+
+  llmProvider: 'LLM提供商',
+  model: '模型',
+  platformTokens: '平台令牌',
+  platformTokensOptional: '(可选, 推荐)',
+  whyTokens: '为什么使用令牌?',
+  whyTokensBody: '没有令牌时平台会限制API请求。' + '使用令牌可以获取更多数据。',
+  keysLocalStorage:
+    '所有密钥存储在您的浏览器中, ' + '除各自API外不会发送到任何服务器。',
+
   footerPrivacy: '所有数据保存在您的浏览器中',
+
+  apiCalls: 'API调用',
+  remaining: '剩余',
+  items: '项目',
+  tokens: '令牌',
+  estCost: '估计',
+  showAnalyzed: '显示分析项目',
+  hideAnalyzed: '隐藏分析项目',
+  showLogs: '显示日志',
+  hideLogs: '隐藏日志',
 };
 
 const allTranslations: Record<LangId, Translations> = {
