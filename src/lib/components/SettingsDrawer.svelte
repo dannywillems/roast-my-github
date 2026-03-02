@@ -1,7 +1,8 @@
 <script lang="ts">
   import ApiKeyInput from './ApiKeyInput.svelte';
-  import { providerConfigs, type ProviderId } from '$lib/providers/types.ts';
-  import { languages } from '$lib/prompts.ts';
+  import { providerConfigs, type ProviderId } from '$lib/providers/types';
+  import { languages } from '$lib/prompts';
+  import { platformConfigs, type PlatformId } from '$lib/platforms/types';
 
   let {
     open = $bindable(false),
@@ -16,19 +17,31 @@
       openai: 'gpt-4o',
       gemini: 'gemini-2.5-flash',
     }),
-    githubPat = $bindable(''),
+    platformPats = $bindable<Record<PlatformId, string>>({
+      github: '',
+      gitlab: '',
+      codeberg: '',
+      bitbucket: '',
+    }),
+    selectedPlatforms = [] as PlatformId[],
     language = $bindable('en'),
   }: {
     open: boolean;
     provider: ProviderId;
     apiKeys: Record<ProviderId, string>;
     models: Record<ProviderId, string>;
-    githubPat: string;
+    platformPats: Record<PlatformId, string>;
+    selectedPlatforms: PlatformId[];
     language: string;
   } = $props();
 
   let activeConfig = $derived(
     providerConfigs.find(p => p.id === provider) ?? providerConfigs[0],
+  );
+
+  // Only show PAT fields for selected platforms
+  let activePlatformConfigs = $derived(
+    platformConfigs.filter(p => selectedPlatforms.includes(p.id)),
   );
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -139,60 +152,62 @@
 
       <hr class="border-zinc-200 dark:border-zinc-700" />
 
-      <!-- GitHub PAT -->
-      <ApiKeyInput
-        bind:value={githubPat}
-        label="GitHub PAT (optional, recommended)"
-        placeholder="ghp_..."
-      />
+      <!-- Per-platform PATs -->
+      <div>
+        <h3
+          class="mb-3 text-sm font-medium text-zinc-700
+                 dark:text-zinc-300"
+        >
+          Platform Tokens (optional, recommended)
+        </h3>
+
+        <div class="space-y-3">
+          {#each activePlatformConfigs as cfg (cfg.id)}
+            <div>
+              <ApiKeyInput
+                bind:value={platformPats[cfg.id]}
+                label={cfg.patLabel}
+                placeholder={cfg.patPlaceholder}
+              />
+              <p
+                class="mt-1 text-[11px] text-zinc-400
+                       dark:text-zinc-500"
+              >
+                {cfg.patHelp}
+              </p>
+            </div>
+          {/each}
+        </div>
+
+        {#if activePlatformConfigs.length === 0}
+          <p class="text-xs text-zinc-400 dark:text-zinc-500">
+            Select platforms above to configure tokens.
+          </p>
+        {/if}
+      </div>
 
       <details
         class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2
                text-xs text-zinc-600
                dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
       >
-        <summary class="cursor-pointer font-medium">
-          Why a PAT? How to create one?
-        </summary>
+        <summary class="cursor-pointer font-medium"> Why use tokens? </summary>
         <div class="mt-2 space-y-2">
           <p>
-            Without a PAT, GitHub limits you to 60 API requests per hour. With
-            one, you get 5,000/hr, enabling deeper analysis (PRs, issues,
-            comments, cross-repo contributions).
+            Without authentication tokens, platforms limit API requests. With
+            tokens, you get higher rate limits and access to more data (PRs,
+            issues, comments, cross-repo contributions).
           </p>
-          <p class="font-medium">How to create a PAT:</p>
-          <ol class="list-decimal pl-4 space-y-1">
-            <li>
-              Go to
-              <a
-                href="https://github.com/settings/tokens?type=beta"
-                target="_blank"
-                rel="noopener"
-                class="text-blue-600 underline dark:text-blue-400"
-              >
-                github.com/settings/tokens
-              </a>
-            </li>
-            <li>Click "Generate new token" (Fine-grained)</li>
-            <li>Give it a name like "roast-my-github"</li>
-            <li>Set expiration to 7 days</li>
-            <li>
-              Under "Repository access", select "Public Repositories
-              (read-only)"
-            </li>
-            <li>No extra permissions needed. Click "Generate token"</li>
-            <li>Copy and paste it here</li>
-          </ol>
           <p>
-            The token only needs read access to public repos. It never leaves
-            your browser.
+            Tokens are stored in your browser's localStorage and never sent to
+            any server except the respective platform API.
           </p>
         </div>
       </details>
 
       <p class="text-xs text-zinc-500 dark:text-zinc-400">
-        Keys are stored in your browser's localStorage and never sent to any
-        server except the respective API endpoints.
+        All keys and tokens are stored in your browser's localStorage and never
+        sent to any server except the respective API endpoints.
       </p>
     </div>
   </div>

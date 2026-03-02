@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "marked": "^17.0.3"
+    "marked": "^17.0.3",
+    "simple-icons": "^16.10.0"
   }
 }

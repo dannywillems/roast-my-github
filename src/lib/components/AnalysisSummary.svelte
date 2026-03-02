@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AnalysisMetadata } from '$lib/github.ts';
+  import type { AnalysisMetadata } from '$lib/platforms/types';
 
   let {
     metadata,
@@ -40,31 +40,31 @@
 
 {#if metadata}
   <div
-    class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm
-           dark:border-zinc-700 dark:bg-zinc-800/50"
+    class="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 text-sm
+           dark:border-zinc-800 dark:bg-zinc-800/30"
   >
     <!-- Stats bar -->
     <div
-      class="flex flex-wrap items-center gap-4 text-xs text-zinc-500
+      class="flex flex-wrap items-center gap-3 text-xs text-zinc-500
                 dark:text-zinc-400"
     >
       <span>
-        {metadata.apiCallsMade} API calls made
+        {metadata.apiCallsMade} API calls
       </span>
       {#if metadata.rateLimitRemaining !== null && metadata.rateLimitTotal !== null}
         <span>
-          {metadata.rateLimitRemaining}/{metadata.rateLimitTotal} requests remaining
+          {metadata.rateLimitRemaining}/{metadata.rateLimitTotal} remaining
         </span>
       {/if}
       {#if metadata.rateLimitReset}
         <span>Resets at {metadata.rateLimitReset}</span>
       {/if}
-      <span>{metadata.analyzedItems.length} items analyzed</span>
+      <span>{metadata.analyzedItems.length} items</span>
       {#if tokenEstimate > 0}
-        <span>~{tokenEstimate.toLocaleString()} input tokens</span>
+        <span>~{tokenEstimate.toLocaleString()} tokens</span>
       {/if}
       {#if costEstimate}
-        <span>Est. cost: {costEstimate}</span>
+        <span>Est: {costEstimate}</span>
       {/if}
     </div>
 
@@ -104,6 +104,14 @@
             <ul class="mt-1 space-y-0.5">
               {#each items as item (item.url)}
                 <li class="text-xs">
+                  <span
+                    class="mr-1 inline-block rounded bg-zinc-200
+                           px-1 text-[9px] font-medium
+                           text-zinc-500 dark:bg-zinc-700
+                           dark:text-zinc-400"
+                  >
+                    {item.platform}
+                  </span>
                   <a
                     href={item.url}
                     target="_blank"

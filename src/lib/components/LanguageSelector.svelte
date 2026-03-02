@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { languages } from '$lib/prompts.ts';
+  import { languages } from '$lib/prompts';
+  import { t } from '$lib/i18n';
 
   let {
     selected = $bindable('en'),
   }: {
     selected: string;
   } = $props();
+
+  let i = $derived(t(selected));
 </script>
 
 <label class="block">
@@ -13,7 +16,7 @@
     class="mb-1 block text-sm font-medium text-zinc-700
            dark:text-zinc-300"
   >
-    Response language
+    {i.responseLang}
   </span>
   <select
     bind:value={selected}

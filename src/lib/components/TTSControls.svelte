@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { browserTTS } from '$lib/tts/browser.ts';
-  import { openaiTTS } from '$lib/tts/openai.ts';
-  import { elevenlabsTTS } from '$lib/tts/elevenlabs.ts';
+  import { browserTTS } from '$lib/tts/browser';
+  import { openaiTTS } from '$lib/tts/openai';
+  import { elevenlabsTTS } from '$lib/tts/elevenlabs';
   import {
     ttsConfigs,
     type TTSProvider,
     type TTSProviderId,
     type TTSControl,
     type TTSVoice,
-  } from '$lib/tts/types.ts';
+  } from '$lib/tts/types';
   import {
     getTTSProvider,
     setTTSProvider,
@@ -16,7 +16,7 @@
     setTTSKey,
     getTTSVoice,
     setTTSVoice,
-  } from '$lib/storage.ts';
+  } from '$lib/storage';
 
   let { text = '' }: { text: string } = $props();
 

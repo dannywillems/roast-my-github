@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AnalysisScope } from '$lib/github.ts';
+  import type { AnalysisScope } from '$lib/platforms/types';
+  import { t } from '$lib/i18n';
 
   let {
     scope = $bindable<AnalysisScope>({
@@ -11,24 +12,28 @@
       crossRepoContributions: true,
       commitMessages: true,
     }),
+    language = 'en',
   }: {
     scope: AnalysisScope;
+    language?: string;
   } = $props();
 
-  const options: { key: keyof AnalysisScope; label: string }[] = [
-    { key: 'recentActivity', label: 'Recent activity (90 days)' },
-    { key: 'sourceCode', label: 'Source code' },
-    { key: 'commitMessages', label: 'Commit messages' },
-    { key: 'pullRequests', label: 'Pull requests' },
-    { key: 'issues', label: 'Issues' },
-    { key: 'commentsReviews', label: 'Comments & reviews' },
-    { key: 'crossRepoContributions', label: 'Cross-repo contributions' },
-  ];
+  let i = $derived(t(language));
+
+  let options = $derived<{ key: keyof AnalysisScope; label: string }[]>([
+    { key: 'recentActivity', label: i.scopeRecentActivity },
+    { key: 'sourceCode', label: i.scopeSourceCode },
+    { key: 'commitMessages', label: i.scopeCommitMessages },
+    { key: 'pullRequests', label: i.scopePullRequests },
+    { key: 'issues', label: i.scopeIssues },
+    { key: 'commentsReviews', label: i.scopeCommentsReviews },
+    { key: 'crossRepoContributions', label: i.scopeCrossRepo },
+  ]);
 </script>
 
 <fieldset>
   <legend class="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-    What to analyze
+    {i.whatToAnalyze}
   </legend>
   <div class="flex flex-wrap gap-2">
     {#each options as opt (opt.key)}

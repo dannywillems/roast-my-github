@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { tones, languages, buildSystemPrompt } from '../prompts.ts';
+import {
+  tones,
+  toneCategories,
+  languages,
+  buildSystemPrompt,
+  buildFollowUpSystemPrompt,
+} from '../prompts.ts';
 
 describe('tones', () => {
-  it('has at least 5 tones', () => {
-    expect(tones.length).toBeGreaterThanOrEqual(5);
+  it('has at least 10 tones', () => {
+    expect(tones.length).toBeGreaterThanOrEqual(10);
   });
 
   it('each tone has required fields', () => {
@@ -11,8 +17,24 @@ describe('tones', () => {
       expect(tone.id).toBeTruthy();
       expect(tone.label).toBeTruthy();
       expect(tone.description).toBeTruthy();
+      expect(tone.emoji).toBeTruthy();
+      expect(tone.category).toBeTruthy();
       expect(tone.systemPrompt).toBeTruthy();
     }
+  });
+
+  it('every tone belongs to a valid category', () => {
+    const validCategories = toneCategories.map(c => c.id);
+    for (const tone of tones) {
+      expect(validCategories).toContain(tone.category);
+    }
+  });
+
+  it('has both professional and fun tones', () => {
+    const pro = tones.filter(t => t.category === 'professional');
+    const fun = tones.filter(t => t.category === 'fun');
+    expect(pro.length).toBeGreaterThanOrEqual(3);
+    expect(fun.length).toBeGreaterThanOrEqual(3);
   });
 
   it('has unique ids', () => {
@@ -109,5 +131,61 @@ describe('buildSystemPrompt', () => {
     const result = buildSystemPrompt(recruiter, 'xx');
     expect(result).toContain(recruiter.systemPrompt);
     expect(result).not.toContain('Write your entire response in');
+  });
+
+  it('includes temporal instruction', () => {
+    const result = buildSystemPrompt(recruiter, 'en');
+    expect(result).toContain('TEMPORAL AWARENESS');
+    expect(result).toContain('Weight the last 90 days');
+  });
+});
+
+describe('buildFollowUpSystemPrompt', () => {
+  const recruiter = tones.find(t => t.id === 'recruiter')!;
+
+  it('includes previous analysis context', () => {
+    const result = buildFollowUpSystemPrompt(
+      recruiter,
+      'en',
+      'Previous analysis: this dev is senior.',
+    );
+    expect(result).toContain('PREVIOUS ANALYSIS');
+    expect(result).toContain('Previous analysis: this dev is senior.');
+  });
+
+  it('includes tone and evidence instructions', () => {
+    const result = buildFollowUpSystemPrompt(recruiter, 'en', 'summary');
+    expect(result).toContain(recruiter.systemPrompt);
+    expect(result).toContain('EVIDENCE AND LINKS');
+  });
+});
+
+describe('creative tones', () => {
+  it('includes detective tone', () => {
+    expect(tones.find(t => t.id === 'detective')).toBeDefined();
+  });
+
+  it('includes sportscaster tone', () => {
+    expect(tones.find(t => t.id === 'sportscaster')).toBeDefined();
+  });
+
+  it('includes therapist tone', () => {
+    expect(tones.find(t => t.id === 'therapist')).toBeDefined();
+  });
+
+  it('includes pirate tone', () => {
+    expect(tones.find(t => t.id === 'pirate')).toBeDefined();
+  });
+
+  it('includes investor tone', () => {
+    expect(tones.find(t => t.id === 'investor')).toBeDefined();
+  });
+
+  it('includes dungeon master tone', () => {
+    expect(tones.find(t => t.id === 'dungeon_master')).toBeDefined();
+  });
+
+  it('includes food critic tone', () => {
+    expect(tones.find(t => t.id === 'foodcritic')).toBeDefined();
   });
 });

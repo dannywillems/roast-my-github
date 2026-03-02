@@ -1,15 +1,34 @@
 import {
-  fetchGitHubData,
-  type GitHubData,
-  type GitHubEvent,
+  type PlatformInput,
+  type PlatformData,
+  type MultiPlatformData,
   type AnalysisScope,
   type AnalysisMetadata,
-} from './github.ts';
+  type AnalyzedItem,
+  type PlatformProvider,
+  type PlatformId,
+  type FollowUpType,
+  type FollowUpContext,
+  type PlatformRepoDetail,
+} from './platforms/types.ts';
+import { githubProvider } from './platforms/github.ts';
+import { gitlabProvider } from './platforms/gitlab.ts';
+import { codebergProvider } from './platforms/codeberg.ts';
+import { bitbucketProvider } from './platforms/bitbucket.ts';
+import {
+  computeTemporalSummary,
+  formatTemporalHeader,
+} from './platforms/temporal.ts';
 import { anthropicProvider } from './providers/anthropic.ts';
 import { openaiProvider } from './providers/openai.ts';
 import { geminiProvider } from './providers/gemini.ts';
 import type { LLMProvider, ProviderId } from './providers/types.ts';
-import { tones, buildSystemPrompt, type Tone } from './prompts.ts';
+import {
+  tones,
+  buildSystemPrompt,
+  buildFollowUpSystemPrompt,
+  type Tone,
+} from './prompts.ts';
 
 export interface AnalysisCallbacks {
   onProgress: (msg: string) => void;
@@ -24,14 +43,20 @@ export interface AnalysisCallbacks {
   ) => void;
 }
 
-const providers: Record<ProviderId, LLMProvider> = {
+const llmProviders: Record<ProviderId, LLMProvider> = {
   anthropic: anthropicProvider,
   openai: openaiProvider,
   gemini: geminiProvider,
 };
 
+const platformProviders: Record<PlatformId, PlatformProvider> = {
+  github: githubProvider,
+  gitlab: gitlabProvider,
+  codeberg: codebergProvider,
+  bitbucket: bitbucketProvider,
+};
+
 // Max characters for PR/issue body in the deep-dive prompt section.
-// Bodies longer than this are truncated to save tokens.
 const MAX_DEEP_DIVE_BODY_LENGTH = 300;
 
 // Max files to show in the file tree before truncating.
@@ -58,7 +83,6 @@ const INPUT_PRICING: Record<string, number> = {
 };
 
 export function estimateTokens(text: string): number {
-  // Rough estimate: ~4 characters per token for English text
   return Math.ceil(text.length / 4);
 }
 
@@ -70,270 +94,285 @@ export function estimateCost(tokens: number, model: string): string {
   return `~$${cost.toFixed(3)}`;
 }
 
-function buildUserMessage(data: GitHubData): string {
+// ---- Build user message from multi-platform data ----
+
+function buildUserMessage(
+  multiData: MultiPlatformData,
+  platformInputs: PlatformInput[],
+): string {
   const parts: string[] = [];
 
-  // ---- Profile ----
-  const u = data.user;
-  parts.push(`# GitHub Profile: ${u.login}`);
-  parts.push(`Profile: ${u.html_url}`);
-  parts.push(`Name: ${u.name ?? 'not set'}`);
-  parts.push(`Bio: ${u.bio ?? 'not set'}`);
-  parts.push(`Company: ${u.company ?? 'not set'}`);
-  parts.push(`Location: ${u.location ?? 'not set'}`);
-  parts.push(`Blog/Website: ${u.blog || 'not set'}`);
-  parts.push(`Hireable: ${u.hireable ?? 'not specified'}`);
-  parts.push(`Public repos: ${u.public_repos}`);
-  parts.push(`Followers: ${u.followers}, Following: ${u.following}`);
-  parts.push(`Account created: ${u.created_at}`);
+  // Temporal context header
+  const temporal = computeTemporalSummary(multiData);
+  parts.push(formatTemporalHeader(temporal, platformInputs));
   parts.push('');
 
-  // ---- Organizations ----
-  if (data.orgs.length > 0) {
-    parts.push('# Organizations');
-    for (const org of data.orgs) {
-      parts.push(`- ${org.login}: ${org.description ?? 'no description'}`);
-    }
-    parts.push('');
-  }
+  // Per-platform sections
+  for (const data of multiData.platforms) {
+    const platformLabel =
+      data.platform.charAt(0).toUpperCase() + data.platform.slice(1);
 
-  // ---- Recent activity summary (events) ----
-  if (data.recentEvents.length > 0) {
-    parts.push('# Recent Activity (last 90 days, from events feed)');
-    const summary = summarizeEvents(data.recentEvents);
-    parts.push(summary);
-    parts.push('');
-  }
-
-  // ---- Cross-repo contributions ----
-  const xr = data.crossRepoActivity;
-
-  if (xr.recentCommitRepos.length > 0) {
-    parts.push('# Repos with recent commits (across all of GitHub)');
-    for (const r of xr.recentCommitRepos) {
-      parts.push(`- ${r} (https://github.com/${r})`);
-    }
-    parts.push('');
-  }
-
-  if (xr.recentPRs.length > 0) {
-    parts.push('# Recent Pull Requests (across all repos)');
-    for (const pr of xr.recentPRs) {
-      const repo = pr.repository_url.replace(
-        'https://api.github.com/repos/',
-        '',
-      );
-      parts.push(
-        `- [${pr.state}] ${repo}: ` +
-          `[${pr.title}](${pr.html_url}) (${pr.created_at})`,
-      );
-      if (pr.body) {
-        parts.push(`  ${pr.body}`);
-      }
-    }
-    parts.push('');
-  }
-
-  if (xr.recentIssues.length > 0) {
-    parts.push('# Recent Issues (across all repos)');
-    for (const issue of xr.recentIssues) {
-      const repo = issue.repository_url.replace(
-        'https://api.github.com/repos/',
-        '',
-      );
-      const labels = issue.labels.map(l => l.name).join(', ');
-      parts.push(
-        `- [${issue.state}] ${repo}: ` +
-          `[${issue.title}](${issue.html_url})` +
-          (labels ? ` (${labels})` : '') +
-          ` - ${issue.comments} comments`,
-      );
-      if (issue.body) {
-        parts.push(`  ${issue.body}`);
-      }
-    }
-    parts.push('');
-  }
-
-  // ---- Owned repos overview ----
-  parts.push('# Owned Repositories (sorted by recent activity)');
-  for (const r of data.ownedRepos) {
-    const lang = r.language ?? 'unknown';
-    const stars = r.stargazers_count;
-    const desc = r.description ?? 'no description';
-    const pushed = r.pushed_at.slice(0, 10);
-    const license = r.license?.spdx_id ?? 'no license';
-    parts.push(
-      `- [${r.name}](${r.html_url}) [${lang}] ${stars} stars, ` +
-        `last pushed ${pushed}, ${license}: ${desc}`,
-    );
-    if (r.topics.length > 0) {
-      parts.push(`  Topics: ${r.topics.join(', ')}`);
-    }
-  }
-  parts.push('');
-
-  // ---- Forked repos (contributions to upstream) ----
-  if (data.forkedRepos.length > 0) {
-    parts.push('# Forked Repositories (contributions to other projects)');
-    for (const r of data.forkedRepos) {
-      const lang = r.language ?? 'unknown';
-      const pushed = r.pushed_at.slice(0, 10);
-      parts.push(
-        `- [${r.full_name}](${r.html_url}) [${lang}] ` +
-          `last pushed ${pushed}: ${r.description ?? 'no description'}`,
-      );
-    }
-    parts.push('');
-  }
-
-  // ---- Contributed repos (from events, not owned or forked) ----
-  if (data.contributedRepoNames.length > 0) {
-    parts.push(
-      '# Contributed Repositories ' +
-        '(repos the user is active in but does not own)',
-    );
-    for (const name of data.contributedRepoNames) {
-      parts.push(`- [${name}](https://github.com/${name})`);
-    }
-    parts.push('');
-  }
-
-  // ---- Deep dives ----
-  for (const detail of data.repoDetails) {
-    const r = detail.repo;
-    const relationLabel =
-      detail.relation === 'forked'
-        ? ' (FORK - contributing to upstream)'
-        : detail.relation === 'contributed'
-          ? ' (CONTRIBUTION - not owned by user)'
-          : '';
-    parts.push(`# Deep Dive: ${r.full_name}${relationLabel}`);
-    parts.push(`URL: ${r.html_url}`);
-    parts.push(`Language: ${r.language ?? 'unknown'}`);
-    parts.push(
-      `Stars: ${r.stargazers_count}, Forks: ${r.forks_count}, ` +
-        `Size: ${r.size}KB`,
-    );
-    parts.push(`Last pushed: ${r.pushed_at}`);
+    // Profile
+    const u = data.user;
+    parts.push(`# ${platformLabel} Profile: ${u.login}`);
+    parts.push(`Profile: ${u.profileUrl}`);
+    parts.push(`Name: ${u.name ?? 'not set'}`);
+    parts.push(`Bio: ${u.bio ?? 'not set'}`);
+    parts.push(`Company: ${u.company ?? 'not set'}`);
+    parts.push(`Location: ${u.location ?? 'not set'}`);
+    parts.push(`Website: ${u.website || 'not set'}`);
+    parts.push(`Public repos: ${u.publicRepos}`);
+    parts.push(`Followers: ${u.followers}, Following: ${u.following}`);
+    parts.push(`Account created: ${u.createdAt}`);
     parts.push('');
 
-    // File tree
-    if (detail.tree.length > 0) {
-      parts.push(`## File structure (first ${MAX_FILE_TREE_ENTRIES} files)`);
-      for (const entry of detail.tree.slice(0, MAX_FILE_TREE_ENTRIES)) {
-        parts.push(`  ${entry.path}`);
-      }
-      if (detail.tree.length > MAX_FILE_TREE_ENTRIES) {
-        parts.push(
-          `  ... and ${detail.tree.length - MAX_FILE_TREE_ENTRIES} more files`,
-        );
+    // Organizations
+    if (data.orgs.length > 0) {
+      parts.push(`# ${platformLabel} Organizations`);
+      for (const org of data.orgs) {
+        parts.push(`- ${org.login}: ${org.description ?? 'no description'}`);
       }
       parts.push('');
     }
 
-    // Commits by this user
-    if (detail.commits.length > 0) {
-      parts.push('## Recent commits by this user');
-      for (const c of detail.commits) {
-        const msg = c.commit.message.split('\n')[0];
-        const date = c.commit.author.date.slice(0, 10);
-        parts.push(`  - [${date}] [${msg}](${c.html_url})`);
+    // Recent activity
+    if (data.events.length > 0) {
+      parts.push(`# ${platformLabel} Recent Activity (from events feed)`);
+      const summary = summarizeEvents(data.events);
+      parts.push(summary);
+      parts.push('');
+    }
+
+    // Cross-repo contributions
+    const xr = data.crossRepoActivity;
+
+    if (xr.recentCommitRepos.length > 0) {
+      parts.push(
+        `# ${platformLabel} Repos with recent commits (across platform)`,
+      );
+      for (const r of xr.recentCommitRepos) {
+        parts.push(`- ${r}`);
       }
       parts.push('');
     }
 
-    // Source files
-    if (detail.files.length > 0) {
-      parts.push('## Source files');
-      for (const f of detail.files) {
-        const fileUrl =
-          `https://github.com/${r.full_name}` +
-          `/blob/${r.default_branch}/${f.path}`;
-        parts.push(`### ${f.path} (${fileUrl})`);
-        parts.push('```');
-        parts.push(f.content);
-        parts.push('```');
-        parts.push('');
-      }
-    }
-
-    // Pull requests
-    if (detail.pullRequests.length > 0) {
-      parts.push('## Pull Requests');
-      for (const pr of detail.pullRequests) {
-        const merged = pr.merged_at ? 'merged' : pr.state;
+    if (xr.recentPRs.length > 0) {
+      parts.push(`# ${platformLabel} Recent Pull Requests (across all repos)`);
+      for (const pr of xr.recentPRs) {
         parts.push(
-          `- [#${pr.number} ${pr.title}](${pr.html_url})` +
-            ` [${merged}]` +
-            ` (+${pr.additions}/-${pr.deletions}, ` +
-            `${pr.changed_files} files, ` +
-            `${pr.review_comments} review comments)`,
+          `- [${pr.state}] ${pr.repoFullName}: ` +
+            `[${pr.title}](${pr.url}) (${pr.createdAt})`,
         );
         if (pr.body) {
-          const body =
-            pr.body.length > MAX_DEEP_DIVE_BODY_LENGTH
-              ? pr.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
-              : pr.body;
-          parts.push(`  Description: ${body}`);
+          parts.push(`  ${pr.body}`);
         }
       }
       parts.push('');
     }
 
-    // Issues
-    if (detail.issues.length > 0) {
-      parts.push('## Issues');
-      for (const issue of detail.issues) {
-        const labels = issue.labels.map(l => l.name).join(', ');
+    if (xr.recentIssues.length > 0) {
+      parts.push(`# ${platformLabel} Recent Issues (across all repos)`);
+      for (const issue of xr.recentIssues) {
+        const labels = issue.labels.join(', ');
         parts.push(
-          `- [#${issue.number} ${issue.title}](${issue.html_url})` +
-            ` [${issue.state}]` +
+          `- [${issue.state}] ${issue.repoFullName}: ` +
+            `[${issue.title}](${issue.url})` +
             (labels ? ` (${labels})` : '') +
             ` - ${issue.comments} comments`,
         );
         if (issue.body) {
-          const body =
-            issue.body.length > MAX_DEEP_DIVE_BODY_LENGTH
-              ? issue.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
-              : issue.body;
-          parts.push(`  Body: ${body}`);
+          parts.push(`  ${issue.body}`);
         }
       }
       parts.push('');
     }
 
-    // Issue comments (communication style)
-    if (detail.issueComments.length > 0) {
-      parts.push('## Issue Comments (communication style)');
-      for (const c of detail.issueComments) {
-        const who = c.user?.login ?? 'unknown';
+    // Owned repos overview
+    parts.push(`# ${platformLabel} Owned Repositories (by recent activity)`);
+    for (const r of data.ownedRepos) {
+      const lang = r.language ?? 'unknown';
+      const stars = r.stars;
+      const desc = r.description ?? 'no description';
+      const pushed = r.pushedAt.slice(0, 10);
+      const license = r.license ?? 'no license';
+      parts.push(
+        `- [${r.name}](${r.url}) [${lang}] ${stars} stars, ` +
+          `last pushed ${pushed}, ${license}: ${desc}`,
+      );
+      if (r.topics.length > 0) {
+        parts.push(`  Topics: ${r.topics.join(', ')}`);
+      }
+    }
+    parts.push('');
+
+    // Forked repos
+    if (data.forkedRepos.length > 0) {
+      parts.push(`# ${platformLabel} Forked Repositories`);
+      for (const r of data.forkedRepos) {
+        const lang = r.language ?? 'unknown';
+        const pushed = r.pushedAt.slice(0, 10);
         parts.push(
-          `- [${c.created_at}] @${who}: ` + `[${c.body}](${c.html_url})`,
+          `- [${r.fullName}](${r.url}) [${lang}] ` +
+            `last pushed ${pushed}: ` +
+            `${r.description ?? 'no description'}`,
         );
       }
       parts.push('');
     }
 
-    // PR review comments (code review depth)
-    if (detail.prReviewComments.length > 0) {
-      parts.push('## PR Review Comments (code review quality)');
-      for (const c of detail.prReviewComments) {
-        const who = c.user?.login ?? 'unknown';
-        parts.push(
-          `- [${c.created_at}] @${who}: ` + `[${c.body}](${c.html_url})`,
-        );
+    // Contributed repos
+    if (data.contributedRepoNames.length > 0) {
+      parts.push(
+        `# ${platformLabel} Contributed Repositories ` +
+          '(active but not owned)',
+      );
+      for (const name of data.contributedRepoNames) {
+        parts.push(`- ${name}`);
       }
       parts.push('');
+    }
+
+    // Deep dives
+    for (const detail of data.repoDetails) {
+      parts.push(formatRepoDetail(detail, platformLabel));
     }
   }
 
   return parts.join('\n');
 }
 
-// ---- Summarize events into human-readable activity report ----
+function formatRepoDetail(
+  detail: PlatformRepoDetail,
+  platformLabel: string,
+): string {
+  const parts: string[] = [];
+  const r = detail.repo;
+  const relationLabel =
+    detail.relation === 'forked'
+      ? ' (FORK - contributing to upstream)'
+      : detail.relation === 'contributed'
+        ? ' (CONTRIBUTION - not owned by user)'
+        : '';
 
-function summarizeEvents(events: GitHubEvent[]): string {
+  parts.push(`# ${platformLabel} Deep Dive: ${r.fullName}${relationLabel}`);
+  parts.push(`URL: ${r.url}`);
+  parts.push(`Language: ${r.language ?? 'unknown'}`);
+  parts.push(`Stars: ${r.stars}, Forks: ${r.forks}, Size: ${r.size}KB`);
+  parts.push(`Last pushed: ${r.pushedAt}`);
+  parts.push('');
+
+  // File tree
+  if (detail.tree.length > 0) {
+    parts.push(`## File structure (first ${MAX_FILE_TREE_ENTRIES} files)`);
+    for (const entry of detail.tree.slice(0, MAX_FILE_TREE_ENTRIES)) {
+      parts.push(`  ${entry.path}`);
+    }
+    if (detail.tree.length > MAX_FILE_TREE_ENTRIES) {
+      parts.push(
+        `  ... and ${detail.tree.length - MAX_FILE_TREE_ENTRIES} more files`,
+      );
+    }
+    parts.push('');
+  }
+
+  // Commits
+  if (detail.commits.length > 0) {
+    parts.push('## Recent commits by this user');
+    for (const c of detail.commits) {
+      const msg = c.message.split('\n')[0];
+      const date = c.authorDate.slice(0, 10);
+      parts.push(`  - [${date}] [${msg}](${c.url})`);
+    }
+    parts.push('');
+  }
+
+  // Source files
+  if (detail.files.length > 0) {
+    parts.push('## Source files');
+    for (const f of detail.files) {
+      parts.push(`### ${f.path}`);
+      parts.push('```');
+      parts.push(f.content);
+      parts.push('```');
+      parts.push('');
+    }
+  }
+
+  // Pull requests
+  if (detail.pullRequests.length > 0) {
+    parts.push('## Pull Requests');
+    for (const pr of detail.pullRequests) {
+      const merged = pr.mergedAt ? 'merged' : pr.state;
+      parts.push(
+        `- [#${pr.number} ${pr.title}](${pr.url})` +
+          ` [${merged}]` +
+          ` (+${pr.additions}/-${pr.deletions}, ` +
+          `${pr.changedFiles} files, ` +
+          `${pr.reviewComments} review comments)`,
+      );
+      if (pr.body) {
+        const body =
+          pr.body.length > MAX_DEEP_DIVE_BODY_LENGTH
+            ? pr.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
+            : pr.body;
+        parts.push(`  Description: ${body}`);
+      }
+    }
+    parts.push('');
+  }
+
+  // Issues
+  if (detail.issues.length > 0) {
+    parts.push('## Issues');
+    for (const issue of detail.issues) {
+      const labels = issue.labels.join(', ');
+      parts.push(
+        `- [#${issue.number} ${issue.title}](${issue.url})` +
+          ` [${issue.state}]` +
+          (labels ? ` (${labels})` : '') +
+          ` - ${issue.comments} comments`,
+      );
+      if (issue.body) {
+        const body =
+          issue.body.length > MAX_DEEP_DIVE_BODY_LENGTH
+            ? issue.body.slice(0, MAX_DEEP_DIVE_BODY_LENGTH) + '...'
+            : issue.body;
+        parts.push(`  Body: ${body}`);
+      }
+    }
+    parts.push('');
+  }
+
+  // Issue comments
+  if (detail.issueComments.length > 0) {
+    parts.push('## Issue Comments (communication style)');
+    for (const c of detail.issueComments) {
+      parts.push(
+        `- [${c.createdAt}] @${c.authorLogin}: ` + `[${c.body}](${c.url})`,
+      );
+    }
+    parts.push('');
+  }
+
+  // PR review comments
+  if (detail.prReviewComments.length > 0) {
+    parts.push('## PR Review Comments (code review quality)');
+    for (const c of detail.prReviewComments) {
+      parts.push(
+        `- [${c.createdAt}] @${c.authorLogin}: ` + `[${c.body}](${c.url})`,
+      );
+    }
+    parts.push('');
+  }
+
+  return parts.join('\n');
+}
+
+// ---- Summarize events ----
+
+import type { PlatformEvent } from './platforms/types.ts';
+
+function summarizeEvents(events: PlatformEvent[]): string {
   const typeCounts = new Map<string, number>();
   const repoCounts = new Map<string, number>();
   const recentPushRepos: string[] = [];
@@ -343,9 +382,9 @@ function summarizeEvents(events: GitHubEvent[]): string {
 
   for (const e of events) {
     typeCounts.set(e.type, (typeCounts.get(e.type) ?? 0) + 1);
-    repoCounts.set(e.repo.name, (repoCounts.get(e.repo.name) ?? 0) + 1);
+    repoCounts.set(e.repoName, (repoCounts.get(e.repoName) ?? 0) + 1);
 
-    const date = e.created_at.slice(0, 10);
+    const date = e.createdAt.slice(0, 10);
 
     if (e.type === 'PushEvent' && recentPushRepos.length < 10) {
       const payload = e.payload as {
@@ -357,7 +396,7 @@ function summarizeEvents(events: GitHubEvent[]): string {
         .map(c => c.message.split('\n')[0]);
       recentPushRepos.push(
         `  [${date}] Pushed ${count} commit(s) to ` +
-          `${e.repo.name}: ${msgs.join('; ')}`,
+          `${e.repoName}: ${msgs.join('; ')}`,
       );
     }
 
@@ -367,7 +406,7 @@ function summarizeEvents(events: GitHubEvent[]): string {
         pull_request?: { title?: string };
       };
       recentPRActions.push(
-        `  [${date}] ${payload.action} PR in ${e.repo.name}: ` +
+        `  [${date}] ${payload.action} PR in ${e.repoName}: ` +
           `${payload.pull_request?.title ?? ''}`,
       );
     }
@@ -379,7 +418,7 @@ function summarizeEvents(events: GitHubEvent[]): string {
       };
       recentIssueActions.push(
         `  [${date}] ${payload.action} issue in ` +
-          `${e.repo.name}: ${payload.issue?.title ?? ''}`,
+          `${e.repoName}: ${payload.issue?.title ?? ''}`,
       );
     }
 
@@ -390,20 +429,15 @@ function summarizeEvents(events: GitHubEvent[]): string {
         pull_request?: { title?: string };
       };
       recentReviewActions.push(
-        `  [${date}] Reviewed PR in ${e.repo.name}` +
+        `  [${date}] Reviewed PR in ${e.repoName}` +
           ` (${payload.review?.state ?? ''}): ` +
           `${payload.pull_request?.title ?? ''}`,
       );
-    }
-
-    if (e.type === 'IssueCommentEvent') {
-      // counted in typeCounts
     }
   }
 
   const lines: string[] = [];
 
-  // Activity breakdown
   lines.push('Event breakdown:');
   const sorted = [...typeCounts.entries()].sort((a, b) => b[1] - a[1]);
   for (const [type, count] of sorted) {
@@ -411,7 +445,6 @@ function summarizeEvents(events: GitHubEvent[]): string {
   }
   lines.push('');
 
-  // Most active repos
   lines.push('Most active repos:');
   const topRepos = [...repoCounts.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -451,33 +484,40 @@ function summarizeEvents(events: GitHubEvent[]): string {
 // ---- Main analyze function ----
 
 export async function analyze(
-  username: string,
+  platformInputs: PlatformInput[],
   toneId: string,
   providerId: ProviderId,
   apiKey: string,
   model: string,
   languageId: string,
-  githubPat: string | undefined,
   scope: AnalysisScope,
   customPersonality: string | undefined,
   callbacks: AnalysisCallbacks,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<MultiPlatformData | null> {
   const log = callbacks.onLog;
 
   const tone = tones.find((t: Tone) => t.id === toneId);
   if (!tone) {
     callbacks.onError('Invalid tone selected');
-    return;
+    return null;
   }
 
-  const provider = providers[providerId];
+  const provider = llmProviders[providerId];
   if (!provider) {
     callbacks.onError('Invalid provider selected');
-    return;
+    return null;
   }
 
-  log(`Starting analysis for ${username}`);
+  if (platformInputs.length === 0) {
+    callbacks.onError('No platforms selected');
+    return null;
+  }
+
+  const platformNames = platformInputs
+    .map(p => `${p.platform}/@${p.username}`)
+    .join(', ');
+  log(`Starting analysis for ${platformNames}`);
   log(`Provider: ${providerId}, Model: ${model}`);
   log(`Tone: ${tone.label}, Language: ${languageId}`);
   log(
@@ -488,35 +528,67 @@ export async function analyze(
   );
 
   try {
-    log('Fetching GitHub data...');
-    const data = await fetchGitHubData(
-      username,
-      githubPat || undefined,
-      (msg: string) => {
-        callbacks.onProgress(msg);
-        log(msg);
-      },
-      scope,
-    );
+    // Fetch data from all platforms
+    const allPlatformData: PlatformData[] = [];
 
-    log(
-      `Fetched: ${data.recentEvents.length} events, ` +
-        `${data.ownedRepos.length} repos, ` +
-        `${data.repoDetails.length} deep dives`,
-    );
+    for (const input of platformInputs) {
+      const pp = platformProviders[input.platform];
+      if (!pp) {
+        log(`Unknown platform: ${input.platform}, skipping`);
+        continue;
+      }
 
-    if (data.metadata.rateLimitRemaining !== null) {
-      log(
-        `GitHub API: ${data.metadata.rateLimitRemaining}` +
-          `/${data.metadata.rateLimitTotal} requests remaining` +
-          ` (resets at ${data.metadata.rateLimitReset})`,
+      log(`Fetching ${input.platform} data for ${input.username}...`);
+      const data = await pp.fetchData(
+        input.username,
+        input.pat,
+        (msg: string) => {
+          callbacks.onProgress(`[${input.platform}] ${msg}`);
+          log(`[${input.platform}] ${msg}`);
+        },
+        scope,
       );
+      allPlatformData.push(data);
+
+      const totalEvents = data.events.length;
+      const totalRepos = data.ownedRepos.length;
+      const totalDives = data.repoDetails.length;
+      log(
+        `[${input.platform}] Fetched: ${totalEvents} events, ` +
+          `${totalRepos} repos, ${totalDives} deep dives`,
+      );
+    }
+
+    const multiData: MultiPlatformData = {
+      platforms: allPlatformData,
+    };
+
+    // Merge metadata from all platforms
+    const mergedMetadata: AnalysisMetadata = {
+      analyzedItems: allPlatformData.flatMap(d => d.metadata.analyzedItems),
+      rateLimitRemaining: null,
+      rateLimitTotal: null,
+      rateLimitReset: null,
+      apiCallsMade: allPlatformData.reduce(
+        (sum, d) => sum + d.metadata.apiCallsMade,
+        0,
+      ),
+    };
+
+    // Use first platform's rate limit info for display
+    for (const d of allPlatformData) {
+      if (d.metadata.rateLimitRemaining !== null) {
+        mergedMetadata.rateLimitRemaining = d.metadata.rateLimitRemaining;
+        mergedMetadata.rateLimitTotal = d.metadata.rateLimitTotal;
+        mergedMetadata.rateLimitReset = d.metadata.rateLimitReset;
+        break;
+      }
     }
 
     callbacks.onProgress('Streaming analysis...');
     log('Building LLM prompt...');
 
-    const userMessage = buildUserMessage(data);
+    const userMessage = buildUserMessage(multiData, platformInputs);
     const systemPrompt = buildSystemPrompt(tone, languageId, customPersonality);
     const totalText = systemPrompt + userMessage;
     const tokens = estimateTokens(totalText);
@@ -528,7 +600,7 @@ export async function analyze(
     );
     log(`Estimated input cost: ${cost}`);
 
-    // Context window limits (approximate input limits)
+    // Context window limits
     const MODEL_LIMITS: Record<string, number> = {
       'claude-opus-4-20250514': 200000,
       'claude-sonnet-4-20250514': 200000,
@@ -547,7 +619,7 @@ export async function analyze(
         `WARNING: Input is ~${tokens.toLocaleString()} tokens, ` +
         `close to the ${limit.toLocaleString()} token limit for ` +
         `${model}. The analysis may be truncated or fail. ` +
-        `Try reducing the scope.`;
+        `Try reducing the scope or number of platforms.`;
       log(msg);
       callbacks.onProgress(msg);
     } else if (tokens > 50000) {
@@ -557,7 +629,7 @@ export async function analyze(
       );
     }
 
-    callbacks.onMetadata(data.metadata, tokens, cost);
+    callbacks.onMetadata(mergedMetadata, tokens, cost);
 
     log(`Streaming from ${providerId} (${model})...`);
 
@@ -591,9 +663,267 @@ export async function analyze(
         `${totalChars} chars total.`,
     );
     callbacks.onDone();
+    return multiData;
   } catch (err) {
     if (signal?.aborted) {
       log('Analysis cancelled by user.');
+      return null;
+    }
+    const msg = err instanceof Error ? err.message : 'Unknown error occurred';
+    log(`ERROR: ${msg}`);
+    callbacks.onError(msg);
+    return null;
+  }
+}
+
+// ---- Follow-up analyze function ----
+
+export async function followUpAnalyze(
+  followUpContext: FollowUpContext,
+  platformInputs: PlatformInput[],
+  previousResponse: string,
+  previousData: MultiPlatformData,
+  toneId: string,
+  providerId: ProviderId,
+  apiKey: string,
+  model: string,
+  languageId: string,
+  scope: AnalysisScope,
+  customPersonality: string | undefined,
+  callbacks: AnalysisCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  const log = callbacks.onLog;
+
+  const tone = tones.find((t: Tone) => t.id === toneId);
+  if (!tone) {
+    callbacks.onError('Invalid tone selected');
+    return;
+  }
+
+  const provider = llmProviders[providerId];
+  if (!provider) {
+    callbacks.onError('Invalid provider selected');
+    return;
+  }
+
+  log(`Follow-up analysis: ${followUpContext.type}`);
+
+  // Build a focused user message based on follow-up type
+  let userMessage = '';
+
+  switch (followUpContext.type) {
+    case 'deep-dive-repo': {
+      const repoName = followUpContext.repoFullName ?? '';
+      log(`Deep dive into ${repoName}`);
+      // Find the repo detail across all platforms
+      let detail: PlatformRepoDetail | undefined;
+      for (const pd of previousData.platforms) {
+        detail = pd.repoDetails.find(d => d.repo.fullName === repoName);
+        if (detail) break;
+      }
+      if (detail) {
+        const platformLabel =
+          detail.repo.platform.charAt(0).toUpperCase() +
+          detail.repo.platform.slice(1);
+        userMessage =
+          `Focus your analysis specifically on this repository.\n\n` +
+          formatRepoDetail(detail, platformLabel);
+      } else {
+        userMessage =
+          `The user wants a deep dive into ${repoName} but ` +
+          `detailed data is not available. Analyze based on ` +
+          `what you know from the previous analysis.`;
+      }
+      break;
+    }
+    case 'time-frame': {
+      const days = followUpContext.timeFrameDays ?? 90;
+      log(`Time frame analysis: last ${days} days`);
+      userMessage =
+        `Focus your analysis ONLY on activity from the ` +
+        `last ${days} days. Ignore older activity.\n\n` +
+        buildUserMessage(previousData, platformInputs);
+      break;
+    }
+    case 'code-review-style': {
+      log('Code review style analysis');
+      const commentSections: string[] = [];
+      for (const pd of previousData.platforms) {
+        for (const detail of pd.repoDetails) {
+          if (
+            detail.prReviewComments.length > 0 ||
+            detail.issueComments.length > 0
+          ) {
+            const label =
+              detail.repo.platform.charAt(0).toUpperCase() +
+              detail.repo.platform.slice(1);
+            if (detail.prReviewComments.length > 0) {
+              commentSections.push(
+                `## ${label} PR Review Comments in ` +
+                  `${detail.repo.fullName}`,
+              );
+              for (const c of detail.prReviewComments) {
+                commentSections.push(
+                  `- [${c.createdAt}] @${c.authorLogin}: ` +
+                    `[${c.body}](${c.url})`,
+                );
+              }
+            }
+            if (detail.issueComments.length > 0) {
+              commentSections.push(
+                `## ${label} Issue Comments in ` + `${detail.repo.fullName}`,
+              );
+              for (const c of detail.issueComments) {
+                commentSections.push(
+                  `- [${c.createdAt}] @${c.authorLogin}: ` +
+                    `[${c.body}](${c.url})`,
+                );
+              }
+            }
+          }
+        }
+      }
+      userMessage =
+        `Analyze this developer's code review style, ` +
+        `communication tone, and feedback quality. Focus ` +
+        `exclusively on their comments and reviews.\n\n` +
+        commentSections.join('\n');
+      break;
+    }
+    case 'issue-communication': {
+      log('Issue communication analysis');
+      const issueSections: string[] = [];
+      for (const pd of previousData.platforms) {
+        for (const detail of pd.repoDetails) {
+          if (detail.issues.length > 0) {
+            const label =
+              detail.repo.platform.charAt(0).toUpperCase() +
+              detail.repo.platform.slice(1);
+            issueSections.push(`## ${label} Issues in ${detail.repo.fullName}`);
+            for (const issue of detail.issues) {
+              issueSections.push(
+                `- [#${issue.number} ${issue.title}]` +
+                  `(${issue.url}) [${issue.state}] ` +
+                  `- ${issue.comments} comments`,
+              );
+              if (issue.body) {
+                issueSections.push(`  Body: ${issue.body}`);
+              }
+            }
+          }
+        }
+      }
+      userMessage =
+        `Analyze how this developer communicates in issues. ` +
+        `How do they report bugs, request features, and ` +
+        `discuss problems?\n\n` +
+        issueSections.join('\n');
+      break;
+    }
+    case 'compare-platforms': {
+      log('Cross-platform comparison');
+      userMessage =
+        `Compare this developer's activity, code quality, and ` +
+        `engagement across the different platforms. Note ` +
+        `differences in activity levels, project types, and ` +
+        `communication styles.\n\n` +
+        buildUserMessage(previousData, platformInputs);
+      break;
+    }
+    case 'collaboration-patterns': {
+      log('Collaboration patterns analysis');
+      userMessage =
+        `Analyze this developer's collaboration patterns: ` +
+        `who they review, who reviews them, co-authorship, ` +
+        `team dynamics visible from PRs and issues.\n\n` +
+        buildUserMessage(previousData, platformInputs);
+      break;
+    }
+    case 'custom': {
+      const prompt = followUpContext.customPrompt ?? '';
+      log(`Custom follow-up: ${prompt}`);
+      userMessage =
+        `The user asks: "${prompt}"\n\n` +
+        `Answer based on the developer data below.\n\n` +
+        buildUserMessage(previousData, platformInputs);
+      break;
+    }
+    default: {
+      userMessage = buildUserMessage(previousData, platformInputs);
+    }
+  }
+
+  // Truncate previous response for context
+  const prevSummary =
+    previousResponse.length > 2000
+      ? previousResponse.slice(0, 2000) + '\n... (truncated)'
+      : previousResponse;
+
+  const systemPrompt = buildFollowUpSystemPrompt(
+    tone,
+    languageId,
+    prevSummary,
+    customPersonality,
+  );
+
+  const totalText = systemPrompt + userMessage;
+  const tokens = estimateTokens(totalText);
+  const cost = estimateCost(tokens, model);
+
+  log(
+    `Follow-up prompt size: ${totalText.length} chars, ` +
+      `~${tokens.toLocaleString()} tokens`,
+  );
+
+  // Merge metadata for display
+  const mergedMetadata: AnalysisMetadata = {
+    analyzedItems: previousData.platforms.flatMap(
+      d => d.metadata.analyzedItems,
+    ),
+    rateLimitRemaining: null,
+    rateLimitTotal: null,
+    rateLimitReset: null,
+    apiCallsMade: 0,
+  };
+  callbacks.onMetadata(mergedMetadata, tokens, cost);
+
+  try {
+    log(`Streaming follow-up from ${providerId} (${model})...`);
+
+    let chunkCount = 0;
+    let totalChars = 0;
+
+    await provider.stream(
+      systemPrompt,
+      userMessage,
+      apiKey,
+      model,
+      (text: string) => {
+        chunkCount++;
+        totalChars += text.length;
+        if (chunkCount === 1) {
+          log('Received first chunk from LLM.');
+        }
+        if (chunkCount % STREAM_LOG_INTERVAL === 0) {
+          log(
+            `Streaming: ${chunkCount} chunks, ` +
+              `~${totalChars} chars received`,
+          );
+        }
+        callbacks.onChunk(text);
+      },
+      signal,
+    );
+
+    log(
+      `Follow-up complete. ${chunkCount} chunks, ` +
+        `${totalChars} chars total.`,
+    );
+    callbacks.onDone();
+  } catch (err) {
+    if (signal?.aborted) {
+      log('Follow-up cancelled by user.');
       return;
     }
     const msg = err instanceof Error ? err.message : 'Unknown error occurred';

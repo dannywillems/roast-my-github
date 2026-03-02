@@ -40,8 +40,8 @@
 
 {#if visible}
   <div
-    class="rounded-lg border border-zinc-200 bg-white p-6
-           dark:border-zinc-700 dark:bg-zinc-800"
+    class="rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6
+           dark:border-zinc-800 dark:bg-zinc-800/50"
   >
     {#if error}
       <div
