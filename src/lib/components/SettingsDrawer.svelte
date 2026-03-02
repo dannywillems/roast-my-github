@@ -142,9 +142,53 @@
       <!-- GitHub PAT -->
       <ApiKeyInput
         bind:value={githubPat}
-        label="GitHub PAT (optional)"
+        label="GitHub PAT (optional, recommended)"
         placeholder="ghp_..."
       />
+
+      <details
+        class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2
+               text-xs text-zinc-600
+               dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+      >
+        <summary class="cursor-pointer font-medium">
+          Why a PAT? How to create one?
+        </summary>
+        <div class="mt-2 space-y-2">
+          <p>
+            Without a PAT, GitHub limits you to 60 API requests per hour. With
+            one, you get 5,000/hr, enabling deeper analysis (PRs, issues,
+            comments, cross-repo contributions).
+          </p>
+          <p class="font-medium">How to create a PAT:</p>
+          <ol class="list-decimal pl-4 space-y-1">
+            <li>
+              Go to
+              <a
+                href="https://github.com/settings/tokens?type=beta"
+                target="_blank"
+                rel="noopener"
+                class="text-blue-600 underline dark:text-blue-400"
+              >
+                github.com/settings/tokens
+              </a>
+            </li>
+            <li>Click "Generate new token" (Fine-grained)</li>
+            <li>Give it a name like "roast-my-github"</li>
+            <li>Set expiration to 7 days</li>
+            <li>
+              Under "Repository access", select "Public Repositories
+              (read-only)"
+            </li>
+            <li>No extra permissions needed. Click "Generate token"</li>
+            <li>Copy and paste it here</li>
+          </ol>
+          <p>
+            The token only needs read access to public repos. It never leaves
+            your browser.
+          </p>
+        </div>
+      </details>
 
       <p class="text-xs text-zinc-500 dark:text-zinc-400">
         Keys are stored in your browser's localStorage and never sent to any
