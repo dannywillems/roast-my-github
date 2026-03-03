@@ -45,6 +45,8 @@
     getConversation,
     addConversationEntry,
     clearConversation,
+    getCachedPlatformData,
+    setCachedPlatformData,
   } from '$lib/storage';
 
   let selectedTone = $state('recruiter');
@@ -174,6 +176,9 @@
     logs = [];
     lastMultiData = null;
 
+    // Check if we have cached platform data for same users + scope
+    const cached = getCachedPlatformData(inputs, scope);
+
     abortController = new AbortController();
 
     const result = await analyze(
@@ -228,10 +233,15 @@
         },
       },
       abortController.signal,
+      cached,
     );
 
     if (result) {
       lastMultiData = result;
+      // Cache the fetched data for reuse with different tones
+      if (!cached) {
+        setCachedPlatformData(inputs, scope, result);
+      }
     }
   }
 

@@ -2,6 +2,8 @@ import type { ProviderId } from './providers/types.ts';
 import type {
   PlatformId,
   PlatformInput,
+  AnalysisScope,
+  MultiPlatformData,
   ConversationEntry,
 } from './platforms/types.ts';
 
@@ -158,6 +160,74 @@ export function getCustomPersonality(): string {
 
 export function setCustomPersonality(personality: string): void {
   set('roast_custom_personality', personality);
+}
+
+// ---- Platform data cache ----
+// Caches fetched platform data so changing tone/model/language
+// does not re-fetch from GitHub/GitLab/etc.
+
+const DATA_CACHE_KEY = 'roast_data_cache';
+const DATA_CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+
+interface DataCacheEntry {
+  key: string;
+  timestamp: number;
+  data: MultiPlatformData;
+}
+
+function dataCacheKey(inputs: PlatformInput[], scope: AnalysisScope): string {
+  const normalized = inputs
+    .map(i => `${i.platform}:${i.username.toLowerCase().trim()}`)
+    .sort()
+    .join('|');
+  const scopeKey = Object.entries(scope)
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+    .sort()
+    .join(',');
+  return `${normalized}@${scopeKey}`;
+}
+
+export function getCachedPlatformData(
+  inputs: PlatformInput[],
+  scope: AnalysisScope,
+): MultiPlatformData | null {
+  const stored = get(DATA_CACHE_KEY);
+  if (!stored) return null;
+  try {
+    const entry = JSON.parse(stored) as DataCacheEntry;
+    const key = dataCacheKey(inputs, scope);
+    if (entry.key !== key) return null;
+    if (Date.now() - entry.timestamp > DATA_CACHE_MAX_AGE_MS) {
+      localStorage.removeItem(DATA_CACHE_KEY);
+      return null;
+    }
+    return entry.data;
+  } catch {
+    localStorage.removeItem(DATA_CACHE_KEY);
+    return null;
+  }
+}
+
+export function setCachedPlatformData(
+  inputs: PlatformInput[],
+  scope: AnalysisScope,
+  data: MultiPlatformData,
+): void {
+  const entry: DataCacheEntry = {
+    key: dataCacheKey(inputs, scope),
+    timestamp: Date.now(),
+    data,
+  };
+  try {
+    localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(entry));
+  } catch {
+    // localStorage full, silently ignore
+  }
+}
+
+export function clearPlatformDataCache(): void {
+  localStorage.removeItem(DATA_CACHE_KEY);
 }
 
 // ---- Conversation history ----

@@ -74,7 +74,7 @@ const INPUT_PRICING: Record<string, number> = {
   'claude-sonnet-4-20250514': 3.0,
   'claude-haiku-4-5-20251001': 0.8,
   // OpenAI
-  'o3': 10.0,
+  o3: 10.0,
   'o4-mini': 1.1,
   'gpt-4.1': 2.0,
   'gpt-4.1-mini': 0.4,
@@ -500,6 +500,7 @@ export async function analyze(
   customPersonality: string | undefined,
   callbacks: AnalysisCallbacks,
   signal?: AbortSignal,
+  cachedData?: MultiPlatformData | null,
 ): Promise<MultiPlatformData | null> {
   const log = callbacks.onLog;
 
@@ -534,60 +535,84 @@ export async function analyze(
   );
 
   try {
-    // Fetch data from all platforms
-    const allPlatformData: PlatformData[] = [];
+    let multiData: MultiPlatformData;
+    let mergedMetadata: AnalysisMetadata;
 
-    for (const input of platformInputs) {
-      const pp = platformProviders[input.platform];
-      if (!pp) {
-        log(`Unknown platform: ${input.platform}, skipping`);
-        continue;
+    if (cachedData) {
+      // Reuse previously fetched platform data (same user, different tone)
+      log('Using cached platform data (skipping API fetch)');
+      callbacks.onProgress('Using cached data...');
+      multiData = cachedData;
+      const allPlatformData = cachedData.platforms;
+      mergedMetadata = {
+        analyzedItems: allPlatformData.flatMap(d => d.metadata.analyzedItems),
+        rateLimitRemaining: null,
+        rateLimitTotal: null,
+        rateLimitReset: null,
+        apiCallsMade: 0,
+      };
+      for (const d of allPlatformData) {
+        if (d.metadata.rateLimitRemaining !== null) {
+          mergedMetadata.rateLimitRemaining = d.metadata.rateLimitRemaining;
+          mergedMetadata.rateLimitTotal = d.metadata.rateLimitTotal;
+          mergedMetadata.rateLimitReset = d.metadata.rateLimitReset;
+          break;
+        }
+      }
+    } else {
+      // Fetch data from all platforms
+      const allPlatformData: PlatformData[] = [];
+
+      for (const input of platformInputs) {
+        const pp = platformProviders[input.platform];
+        if (!pp) {
+          log(`Unknown platform: ${input.platform}, skipping`);
+          continue;
+        }
+
+        log(`Fetching ${input.platform} data for ` + `${input.username}...`);
+        const data = await pp.fetchData(
+          input.username,
+          input.pat,
+          (msg: string) => {
+            callbacks.onProgress(`[${input.platform}] ${msg}`);
+            log(`[${input.platform}] ${msg}`);
+          },
+          scope,
+        );
+        allPlatformData.push(data);
+
+        const totalEvents = data.events.length;
+        const totalRepos = data.ownedRepos.length;
+        const totalDives = data.repoDetails.length;
+        log(
+          `[${input.platform}] Fetched: ${totalEvents} events, ` +
+            `${totalRepos} repos, ${totalDives} deep dives`,
+        );
       }
 
-      log(`Fetching ${input.platform} data for ${input.username}...`);
-      const data = await pp.fetchData(
-        input.username,
-        input.pat,
-        (msg: string) => {
-          callbacks.onProgress(`[${input.platform}] ${msg}`);
-          log(`[${input.platform}] ${msg}`);
-        },
-        scope,
-      );
-      allPlatformData.push(data);
+      multiData = { platforms: allPlatformData };
 
-      const totalEvents = data.events.length;
-      const totalRepos = data.ownedRepos.length;
-      const totalDives = data.repoDetails.length;
-      log(
-        `[${input.platform}] Fetched: ${totalEvents} events, ` +
-          `${totalRepos} repos, ${totalDives} deep dives`,
-      );
-    }
+      // Merge metadata from all platforms
+      mergedMetadata = {
+        analyzedItems: allPlatformData.flatMap(d => d.metadata.analyzedItems),
+        rateLimitRemaining: null,
+        rateLimitTotal: null,
+        rateLimitReset: null,
+        apiCallsMade: allPlatformData.reduce(
+          (sum, d) => sum + d.metadata.apiCallsMade,
+          0,
+        ),
+      };
 
-    const multiData: MultiPlatformData = {
-      platforms: allPlatformData,
-    };
-
-    // Merge metadata from all platforms
-    const mergedMetadata: AnalysisMetadata = {
-      analyzedItems: allPlatformData.flatMap(d => d.metadata.analyzedItems),
-      rateLimitRemaining: null,
-      rateLimitTotal: null,
-      rateLimitReset: null,
-      apiCallsMade: allPlatformData.reduce(
-        (sum, d) => sum + d.metadata.apiCallsMade,
-        0,
-      ),
-    };
-
-    // Use first platform's rate limit info for display
-    for (const d of allPlatformData) {
-      if (d.metadata.rateLimitRemaining !== null) {
-        mergedMetadata.rateLimitRemaining = d.metadata.rateLimitRemaining;
-        mergedMetadata.rateLimitTotal = d.metadata.rateLimitTotal;
-        mergedMetadata.rateLimitReset = d.metadata.rateLimitReset;
-        break;
+      // Use first platform's rate limit info for display
+      for (const d of allPlatformData) {
+        if (d.metadata.rateLimitRemaining !== null) {
+          mergedMetadata.rateLimitRemaining = d.metadata.rateLimitRemaining;
+          mergedMetadata.rateLimitTotal = d.metadata.rateLimitTotal;
+          mergedMetadata.rateLimitReset = d.metadata.rateLimitReset;
+          break;
+        }
       }
     }
 
@@ -613,7 +638,7 @@ export async function analyze(
       'claude-opus-4-20250514': 200000,
       'claude-sonnet-4-20250514': 200000,
       'claude-haiku-4-5-20251001': 200000,
-      'o3': 200000,
+      o3: 200000,
       'o4-mini': 200000,
       'gpt-4.1': 1000000,
       'gpt-4.1-mini': 1000000,
